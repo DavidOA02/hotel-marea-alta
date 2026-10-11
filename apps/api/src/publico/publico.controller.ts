@@ -7,11 +7,14 @@ import { falla } from '../comun/errores';
 import { Limite } from '../comun/limite.guard';
 import { ZodPipe } from '../comun/zod.pipe';
 import { ReservasService } from '../reservas/reservas.service';
+import { Bitacora } from '../auditoria/bitacora.service';
+import { Correos } from '../correo/correos.service';
+import { constanciaReclamo } from '../correo/plantillas';
 
 /** Endpoints públicos: web del hotel, Mi reserva, Libro de Reclamaciones y boletín. */
 @Controller()
 export class PublicoController {
-  constructor(private readonly db: Db, private readonly reservas: ReservasService) {}
+  constructor(private readonly db: Db, private readonly reservas: ReservasService, private readonly bitacora: Bitacora, private readonly correos: Correos) {}
 
   @Get('salud')
   async salud(@Res() res: Response) {
@@ -36,7 +39,7 @@ export class PublicoController {
   @Post('reservas') @Limite(10)
   async crear(@Body(new ZodPipe(reservaWebSchema)) d: z.output<typeof reservaWebSchema>) {
     const r = await this.reservas.crear({ ...d, cliente: d, canal: 'Web', clienteId: null, habitacionId: null });
-    return { ...r, mensaje: 'Reserva confirmada. Te enviaremos los detalles a tu correo.' };
+    return { ...r, puedePagarEnLinea: ReservasService.puedePagarEnLinea({ estado: r.estado, saldo: r.total }), mensaje: 'Reserva confirmada. Te enviamos los detalles a tu correo.' };
   }
 
   @Get('reservas/:codigo') @Limite(20)
@@ -64,13 +67,19 @@ export class PublicoController {
       const ins = await this.db.uno<any>(`
         INSERT INTO reclamaciones (numero, anio, correlativo, tipo, nombre_completo, tipo_documento, numero_documento, domicilio, telefono, email,
           es_menor, apoderado, bien_tipo, monto_reclamado, codigo_reserva, descripcion_bien, detalle, pedido, fecha_limite_respuesta)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING numero, fecha, fecha_limite_respuesta, tipo`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
         [numero, anio, n, d.tipo, d.nombreCompleto, d.tipoDocumento, d.numeroDocumento, d.domicilio, d.telefono, d.email, d.esMenor,
           d.esMenor ? d.apoderado : null, d.bienTipo, d.montoReclamado, d.codigoReserva?.toUpperCase() ?? null, d.descripcionBien, d.detalle, d.pedido, limite], c);
+      // Constancia al correo del consumidor (Reglamento del Libro de Reclamaciones) y registro en la bitácora, en la misma transacción
+      await this.correos.encolar({ tipo: 'reclamo_constancia', para: ins.email, reclamacionId: ins.id, ...constanciaReclamo(ins) }, c);
+      await this.bitacora.registrar({ accion: 'reclamo.registrar', entidad: 'reclamo', entidadId: numero,
+        descripcion: `${d.tipo} N.° ${numero} registrado por ${d.nombreCompleto} (plazo de respuesta: ${limite.split('-').reverse().join('/')})`,
+        autor: { nombre: `Consumidor: ${d.nombreCompleto}` } }, c);
       return ins;
     });
     const [y, m, dd] = r.fechaLimiteRespuesta.split('-');
-    return { ...r, mensaje: `Registramos tu ${r.tipo.toLowerCase()}. Responderemos a más tardar el ${dd}/${m}/${y}.` };
+    return { numero: r.numero, fecha: r.fecha, fechaLimiteRespuesta: r.fechaLimiteRespuesta, tipo: r.tipo,
+      mensaje: `Registramos tu ${r.tipo.toLowerCase()}. Te enviamos la constancia a ${r.email}. Responderemos a más tardar el ${dd}/${m}/${y}.` };
   }
 
   @Post('suscriptores') @HttpCode(200) @Limite(10)

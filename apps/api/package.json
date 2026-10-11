@@ -16,6 +16,7 @@
     "@nestjs/core": "11.2.7",
     "@nestjs/jwt": "11.0.2",
     "@nestjs/platform-express": "11.2.7",
+    "nodemailer": "10.0.12",
     "pg": "8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -43,6 +44,8 @@
     "testEnvironment": "node",
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
-    "moduleNameMapper": { "^@marea/shared$": "<rootDir>/../../../packages/shared/src" }
+    "moduleNameMapper": {
+      "^@marea/shared$": "<rootDir>/../../../packages/shared/src"
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { CanActivate, createParamDecorator, ExecutionContext, Injectable, SetMetadata } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { falla } from '../comun/errores';
+import { contexto } from '../comun/contexto';
 import { AuthService, UsuarioSesion } from './auth.service';
 
 /** Restringe un controlador o acción a ciertos roles. */
@@ -17,6 +18,8 @@ export class SesionGuard implements CanActivate {
     const [tipo, token] = String(req.headers.authorization || '').split(' ');
     if (tipo !== 'Bearer' || !token) throw falla(401, 'Debes iniciar sesión.');
     req.usuario = await this.auth.validarAcceso(token);
+    const peticion = contexto.getStore();
+    if (peticion) peticion.usuario = req.usuario;   // la bitácora sabe quién hace cada acción
     const roles = this.reflector.getAllAndOverride<string[]>('roles', [ctx.getHandler(), ctx.getClass()]);
     if (roles?.length && !roles.includes(req.usuario.rol)) throw falla(403, 'No tienes permiso para esta acción.');
     return true;

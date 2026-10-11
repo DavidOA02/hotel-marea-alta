@@ -3,6 +3,10 @@ import { Test } from '@nestjs/testing';
 import { hoyLima, sumarDias } from '@marea/shared';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
+import { Correos } from '../src/correo/correos.service';
+import { Db } from '../src/db/db.service';
+import { PagosEnLinea } from '../src/pagos-en-linea/pagos-en-linea.service';
+import { Simulada } from '../src/pagos-en-linea/pasarelas';
 
 process.env.PGDATABASE = 'hotel_marea_alta_test';
 process.env.SIN_LIMITES = 'true';
@@ -181,6 +185,239 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(rp.nochesOcupadas).toBeGreaterThan(0);
       expect(rp.adr).toBeGreaterThan(0);
       expect(rp.porDiaSemana).toHaveLength(7);
+    });
+  });
+
+  /* ============================== Mejoras ============================== */
+  const db = () => app.get(Db);
+  const ficha = async (codigo: string) => (await http.get(`/api/gestion/reservas/${codigo}`).set(R()).expect(200)).body;
+  const reservaPanel = async (extra: object) => (await http.post('/api/gestion/reservas').set(R())
+    .send({ clienteId: 1, tipoHabitacion: 'horizonte', huespedes: 2, residencia: 'PE', canal: 'Telefono', ...extra }).expect(201)).body;
+  const pagarTodo = async (codigo: string) => {
+    const r = (await ficha(codigo)).reserva;
+    await http.post(`/api/gestion/reservas/${codigo}/pagos`).set(R()).send({ monto: r.saldo, moneda: 'PEN', metodo: 'Efectivo' }).expect(200);
+  };
+
+  describe('Correos automáticos', () => {
+    it('la reserva encola la confirmación y el proceso la marca como simulada (sin SMTP)', async () => {
+      const r = await http.post('/api/reservas').send(huesped(300, { tipoHabitacion: 'duna', fechaEntrada: d(80), fechaSalida: d(81) })).expect(201);
+      expect(r.body.mensaje).toMatch(/Te enviamos los detalles/);
+      let f = await ficha(r.body.codigo);
+      expect(f.correos).toEqual([expect.objectContaining({ tipo: 'confirmacion', para: 'h300@prueba.pe', estado: 'Pendiente' })]);
+      expect(await app.get(Correos).procesar()).toBeGreaterThanOrEqual(1);
+      f = await ficha(r.body.codigo);
+      expect(f.correos[0].estado).toBe('Simulado');
+    });
+
+    it('escapa el HTML de los datos que escribe el huésped', async () => {
+      const r = await http.post('/api/reservas').send(huesped(301, { nombres: '<img src=x onerror=alert(1)>', tipoHabitacion: 'duna', fechaEntrada: d(82), fechaSalida: d(83) })).expect(201);
+      const [c] = await db().query(`SELECT html FROM correos k JOIN reservas r ON r.id = k.reserva_id WHERE r.codigo = $1`, [r.body.codigo]);
+      expect(c.html).not.toContain('<img');
+      expect(c.html).toContain('confirmada, &lt;img!');   // el saludo usa el primer nombre, escapado
+    });
+
+    it('cancelar desde el panel avisa al huésped', async () => {
+      const r = await reservaPanel({ tipoHabitacion: 'duna', fechaEntrada: d(84), fechaSalida: d(85) });
+      await http.post(`/api/gestion/reservas/${r.codigo}/cancelar`).set(R()).send({}).expect(200);
+      expect((await ficha(r.codigo)).correos.map((c: any) => c.tipo)).toEqual(['confirmacion', 'cancelacion']);
+    });
+
+    it('Libro de Reclamaciones: constancia al registrar y respuesta automática al consumidor', async () => {
+      const hoja = { tipo: 'Queja', nombreCompleto: 'Ana Ríos', tipoDocumento: 'DNI', numeroDocumento: '40404041', domicilio: 'Av. Lima 2', telefono: '987654321',
+        email: 'ana.rios@prueba.pe', bienTipo: 'Servicio', montoReclamado: '', descripcionBien: 'Hospedaje', detalle: 'Ruido de noche', pedido: 'Mejorar', declaraVeracidad: true, aceptaPrivacidad: true };
+      const h = (await http.post('/api/reclamaciones').send(hoja).expect(201)).body;
+      expect(h.mensaje).toMatch(/Te enviamos la constancia a ana.rios@prueba.pe/);
+      expect((await http.get(`/api/gestion/reclamaciones/${h.numero}`).set(R()).expect(200)).body.correos.map((c: any) => c.tipo)).toEqual(['reclamo_constancia']);
+      const resp = await http.patch(`/api/gestion/reclamaciones/${h.numero}/respuesta`).set(A()).send({ respuesta: 'Lamentamos las molestias; instalamos ventanas acústicas.' }).expect(200);
+      expect(resp.body.mensaje).toMatch(/enviada a ana.rios@prueba.pe/);
+      const det = (await http.get(`/api/gestion/reclamaciones/${h.numero}`).set(R())).body;
+      expect(det.correos.map((c: any) => c.tipo)).toEqual(['reclamo_constancia', 'reclamo_respuesta']);
+    });
+  });
+
+  describe('Cambio de habitación', () => {
+    it('antes de la llegada: mantener tarifa, recalcular y validaciones', async () => {
+      const r = await reservaPanel({ fechaEntrada: d(60), fechaSalida: d(63) });
+      const op = (await http.get(`/api/gestion/reservas/${r.codigo}/cambio-habitacion`).set(R()).expect(200)).body;
+      expect(op).toMatchObject({ desde: d(60), nochesRestantes: 3, total: 1950 });
+      expect(op.opciones.map((h: any) => h.numero)).not.toContain(r.habitacion);
+      expect(op.opciones.every((h: any) => h.capacidad >= 2)).toBe(true);
+      const otraHorizonte = op.opciones.find((h: any) => h.tipoCodigo === 'horizonte');
+      const suite = op.opciones.find((h: any) => h.tipoCodigo === 'pleamar');
+      expect(suite.totalRecalculado).toBe(3270);
+
+      const corto = await http.post(`/api/gestion/reservas/${r.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: otraHorizonte.id, tarifa: 'Mantener', motivo: 'x' }).expect(400);
+      expect(corto.body.campo).toBe('motivo');
+      const m = await http.post(`/api/gestion/reservas/${r.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: otraHorizonte.id, tarifa: 'Mantener', motivo: 'Pidió piso más alto' }).expect(200);
+      expect(m.body).toMatchObject({ habitacionAnterior: r.habitacion, habitacion: otraHorizonte.numero, total: 1950 });
+      await http.post(`/api/gestion/reservas/${r.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: otraHorizonte.id, tarifa: 'Mantener', motivo: 'Otra vez' }).expect(409);
+
+      const s = await http.post(`/api/gestion/reservas/${r.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: suite.id, tarifa: 'Recalcular', motivo: 'Upgrade pagado' }).expect(200);
+      expect(s.body).toMatchObject({ habitacion: suite.numero, totalAnterior: 1950, total: 3270 });
+      const f = await ficha(r.codigo);
+      expect(f.reserva).toMatchObject({ total: 3270, subtotal: 2771.19, igv: 498.81, habitacionDesde: null, tipoHabitacion: 'Suite Pleamar' });
+      expect(f.cambios).toHaveLength(2);
+      expect(f.historial.map((x: any) => x.accion)).toEqual(['reserva.crear', 'reserva.cambiar_habitacion', 'reserva.cambiar_habitacion']);
+    });
+
+    it('no permite pasar a una habitación ocupada en esas fechas', async () => {
+      const a = await reservaPanel({ tipoHabitacion: 'duna', fechaEntrada: d(90), fechaSalida: d(93) });
+      const b = await reservaPanel({ tipoHabitacion: 'duna', fechaEntrada: d(92), fechaSalida: d(94) });
+      const habB = (await ficha(b.codigo)).reserva.habitacionId;
+      const op = (await http.get(`/api/gestion/reservas/${a.codigo}/cambio-habitacion`).set(R())).body;
+      expect(op.opciones.map((h: any) => h.id)).not.toContain(habB);
+      const x = await http.post(`/api/gestion/reservas/${a.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: habB, tarifa: 'Mantener', motivo: 'Prueba de choque' }).expect(409);
+      expect(x.body.campo).toBe('habitacionId');
+    });
+
+    it('huésped en el hotel: cambia desde hoy, sin falsos cruces con noches pasadas, y la habitación anterior queda por limpiar', async () => {
+      const [h1, h2] = await db().query<any>(`SELECT id, numero FROM habitaciones WHERE numero IN ('108','109') ORDER BY numero`);
+      // En curso en la 108 (llegó hace 2 días) y una reserva de la 109 que terminaba hoy sin check-in (aún sin marcar No show)
+      const [enCurso] = await db().query<any>(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total, estado, canal, fecha_check_in)
+        VALUES ('MA9900001', 1, $1, $2, $3, 2, 1525.42, 274.58, 1800, 'CheckIn', 'Recepcion', now()) RETURNING codigo`, [h1.id, d(-2), d(2)]);
+      await db().query(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total, estado, canal)
+        VALUES ('MA9900002', 1, $1, $2, $3, 1, 762.71, 137.29, 900, 'Confirmada', 'Web')`, [h2.id, d(-2), hoy]);
+      const r = await http.post(`/api/gestion/reservas/${enCurso.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: h2.id, tarifa: 'Recalcular', motivo: 'Fuga de agua en el baño' }).expect(200);
+      expect(r.body).toMatchObject({ habitacion: '109', desde: hoy, total: 1800 });   // misma tarifa: el total no cambia
+      expect(r.body.advertencia).toMatch(/108 pasó a «Por limpiar»/);
+      const f = await ficha(enCurso.codigo);
+      expect(f.reserva).toMatchObject({ habitacion: '109', habitacionDesde: hoy, estado: 'CheckIn' });
+      expect((await http.get('/api/gestion/habitaciones').set(R())).body.find((h: any) => h.numero === '108').estadoLimpieza).toBe('Sucia');
+      // La 108 queda libre desde hoy para otra reserva
+      await reservaPanel({ tipoHabitacion: 'duna', habitacionId: h1.id, fechaEntrada: hoy, fechaSalida: d(1) });
+    });
+
+    it('la restricción de la base rechaza cruces aunque falle la validación de la API', async () => {
+      const [h] = await db().query<any>(`SELECT id FROM habitaciones WHERE numero = '109'`);
+      await expect(db().query(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total)
+        VALUES ('MA9900003', 1, $1, $2, $3, 1, 381.36, 68.64, 450)`, [h.id, d(1), d(2)])).rejects.toMatchObject({ code: '23P01' });
+    });
+  });
+
+  describe('Pagos en línea (pasarela simulada)', () => {
+    let codigo = '';
+    it('crea la orden con el saldo de la reserva, rechaza y luego aprueba', async () => {
+      const r = await http.post('/api/reservas').send(huesped(400, { tipoHabitacion: 'duna', fechaEntrada: d(70), fechaSalida: d(72) })).expect(201);
+      codigo = r.body.codigo;
+      expect(r.body.puedePagarEnLinea).toBe(true);
+      await http.post('/api/pagos-en-linea').send({ codigo, email: 'otro@prueba.pe' }).expect(404);
+      await http.get('/api/pagos-en-linea/no-es-un-uuid').expect(404);
+
+      const o1 = (await http.post('/api/pagos-en-linea').send({ codigo, email: 'H400@prueba.pe' }).expect(201)).body;
+      expect(o1).toMatchObject({ pasarela: 'Simulada', monto: 900 });
+      expect((await http.get(`/api/pagos-en-linea/${o1.id}`).expect(200)).body).toMatchObject({ estado: 'Pendiente', codigoReserva: codigo, datosCheckout: { modo: 'simulada' } });
+      await http.post(`/api/pagos-en-linea/${o1.id}/culqi`).send({ token: 'tkn_test_abcdefgh' }).expect(400);   // otra pasarela
+      expect((await http.post(`/api/pagos-en-linea/${o1.id}/simulada`).send({ aprobar: false }).expect(200)).body).toMatchObject({ estado: 'Rechazado', datosCheckout: null });
+      await http.post(`/api/pagos-en-linea/${o1.id}/simulada`).send({ aprobar: true }).expect(409);
+
+      const o2 = (await http.post('/api/pagos-en-linea').send({ codigo, email: 'h400@prueba.pe' }).expect(201)).body;
+      expect((await http.post(`/api/pagos-en-linea/${o2.id}/simulada`).send({ aprobar: true }).expect(200)).body.estado).toBe('Aprobado');
+      const pub = (await http.get(`/api/reservas/${codigo}?email=h400@prueba.pe`)).body;
+      expect(pub).toMatchObject({ pagado: 900, saldo: 0, puedePagarEnLinea: false });
+      const f = await ficha(codigo);
+      expect(f.pagos).toEqual([expect.objectContaining({ montoSoles: 900, metodo: 'Tarjeta', pasarela: 'Simulada', registradoPor: 'Web · Simulada', referencia: expect.stringMatching(/^SIM-/) })]);
+      expect(f.correos.map((c: any) => c.tipo)).toEqual(['confirmacion', 'pago']);
+      expect(f.historial.some((x: any) => x.accion === 'pago.en_linea' && x.usuario === 'Pasarela Simulada')).toBe(true);
+      await http.post('/api/pagos-en-linea').send({ codigo, email: 'h400@prueba.pe' }).expect(409);   // sin saldo
+    });
+
+    it('avisos repetidos o simultáneos de la pasarela registran el pago una sola vez', async () => {
+      const r = await http.post('/api/reservas').send(huesped(401, { tipoHabitacion: 'duna', fechaEntrada: d(74), fechaSalida: d(75) })).expect(201);
+      const o = (await http.post('/api/pagos-en-linea').send({ codigo: r.body.codigo, email: 'h401@prueba.pe' }).expect(201)).body;
+      const orden = { id: o.id, numero: 1, monto: o.monto, email: '', codigoReserva: r.body.codigo, titular: '', expira: new Date() };
+      const svc = app.get(PagosEnLinea);
+      await Promise.all([svc.finalizar(o.id, Simulada.resultado(orden, true)), svc.finalizar(o.id, Simulada.resultado(orden, true)), svc.finalizar(o.id, Simulada.resultado(orden, true))]);
+      await svc.finalizar(o.id, Simulada.resultado(orden, false));   // un aviso tardío de rechazo no deshace el pago
+      const f = await ficha(r.body.codigo);
+      expect(f.pagos).toHaveLength(1);
+      expect(f.reserva.saldo).toBe(0);
+      expect((await http.get(`/api/pagos-en-linea/${o.id}`)).body.estado).toBe('Aprobado');
+    });
+  });
+
+  describe('Facturación electrónica (OSE simulado)', () => {
+    it('boleta para residente: correlativo, montos y correo al cliente; no se duplica', async () => {
+      const r = await reservaPanel({ tipoHabitacion: 'duna', fechaEntrada: d(100), fechaSalida: d(102) });
+      await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Boleta' }).expect(409);   // aún no pagada
+      await pagarTodo(r.codigo);
+      const b = (await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Boleta' }).expect(201)).body;
+      expect(b).toMatchObject({ tipo: '03', serie: 'B001', numero: 1, estado: 'Aceptado', tipoOperacion: '0101', gravada: 762.71, igv: 137.29, total: 900, proveedor: 'Simulado' });
+      expect(b.mensaje).toBe('Boleta B001-1 aceptada por SUNAT.');
+      expect(b.cadenaQr).toMatch(/^20000000000\|03\|B001\|1\|137\.29\|900\.00\|/);
+      await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Boleta' }).expect(409);
+      const f = await ficha(r.codigo);
+      expect(f.comprobantes).toHaveLength(1);
+      expect(f.correos.map((c: any) => c.tipo)).toContain('comprobante');
+      // Con comprobante emitido no se recalcula la tarifa al cambiar de habitación
+      const op = (await http.get(`/api/gestion/reservas/${r.codigo}/cambio-habitacion`).set(R())).body;
+      expect(op.tieneComprobante).toBe(true);
+      const x = await http.post(`/api/gestion/reservas/${r.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: op.opciones[0].id, tarifa: 'Recalcular', motivo: 'Prueba con comprobante' }).expect(409);
+      expect(x.body.campo).toBe('tarifa');
+
+      // Anular: solo administrador; luego se puede emitir otra con el siguiente número
+      await http.post(`/api/gestion/comprobantes/${b.id}/anular`).set(R()).send({ motivo: 'Datos del cliente errados' }).expect(403);
+      await http.post(`/api/gestion/comprobantes/${b.id}/anular`).set(A()).send({ motivo: 'Datos del cliente errados' }).expect(200);
+      const b2 = (await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Boleta' }).expect(201)).body;
+      expect(b2).toMatchObject({ serie: 'B001', numero: 2, estado: 'Aceptado' });
+    });
+
+    it('factura con RUC y factura de exportación para extranjero con pasaporte', async () => {
+      const r = await reservaPanel({ fechaEntrada: d(104), fechaSalida: d(105) });
+      await pagarTodo(r.codigo);
+      const mal = await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Factura', ruc: '30123456789', razonSocial: 'X', direccion: 'Y' }).expect(400);
+      expect(mal.body.campo).toBe('ruc');
+      await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Factura', exportacion: true }).expect(400);
+      const f = (await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R())
+        .send({ tipo: 'Factura', ruc: '20123456789', razonSocial: 'Viajes del Sur SAC', direccion: 'Av. Grau 100, Ica' }).expect(201)).body;
+      expect(f).toMatchObject({ tipo: '01', serie: 'F001', numero: 1, clienteTipoDoc: '6', clienteNumDoc: '20123456789', clienteNombre: 'VIAJES DEL SUR SAC', total: 650 });
+
+      const ext = await http.post('/api/gestion/reservas').set(R()).send({
+        cliente: { nombres: 'John', apellidos: 'Smith', tipoDocumento: 'PAS', numeroDocumento: 'US1234567', email: 'john@prueba.com', codigoPais: '1', telefono: '5551234567', residencia: 'EXT' },
+        tipoHabitacion: 'horizonte', fechaEntrada: d(106), fechaSalida: d(108), huespedes: 2, residencia: 'EXT', canal: 'WhatsApp' }).expect(201);
+      await pagarTodo(ext.body.codigo);
+      const e = (await http.post(`/api/gestion/reservas/${ext.body.codigo}/comprobante`).set(R()).send({ tipo: 'Factura', exportacion: true }).expect(201)).body;
+      expect(e).toMatchObject({ tipo: '01', serie: 'F001', numero: 2, tipoOperacion: '0202', clienteTipoDoc: '7', clienteNumDoc: 'US1234567', exportacion: 1101.69, gravada: 0, igv: 0, total: 1101.69 });
+      expect(e.items[0]).toMatchObject({ afectacion: '40', cantidad: 1 });
+    });
+
+    it('correlativo sin huecos ni duplicados con emisiones simultáneas', async () => {
+      const codigos: string[] = [];
+      for (let i = 0; i < 4; i++) { const r = await reservaPanel({ tipoHabitacion: 'duna', fechaEntrada: d(110 + i * 2), fechaSalida: d(111 + i * 2) }); await pagarTodo(r.codigo); codigos.push(r.codigo); }
+      const rs = await Promise.all(codigos.map(c => http.post(`/api/gestion/reservas/${c}/comprobante`).set(R()).send({ tipo: 'Boleta' })));
+      expect(rs.map(x => x.status)).toEqual([201, 201, 201, 201]);
+      expect(rs.map(x => x.body.numero).sort((a, b) => a - b)).toEqual([3, 4, 5, 6]);
+      const lista = (await http.get(`/api/gestion/comprobantes?desde=${hoy}&hasta=${hoy}`).set(R()).expect(200)).body;
+      expect(lista.totales).toMatchObject({ cantidad: 7, rechazados: 0, pendientes: 0 });   // B001-2..6, F001-1, F001-2 (B001-1 anulada)
+    });
+  });
+
+  describe('Bitácora de auditoría', () => {
+    it('solo el administrador la consulta y registra quién, qué y desde qué IP', async () => {
+      await http.get('/api/gestion/bitacora').set(R()).expect(403);
+      const h108 = (await http.get('/api/gestion/habitaciones').set(R())).body.find((h: any) => h.numero === '108');
+      await http.patch(`/api/gestion/habitaciones/${h108.id}/limpieza`).set(R()).send({ estadoLimpieza: 'Limpia' }).expect(200);
+      const b =(await http.get('/api/gestion/bitacora?limite=5000').set(A()).expect(200)).body as any[];
+      const acciones = new Set(b.map(x => x.accion));
+      for (const a of ['sesion.ingreso', 'sesion.fallida', 'sesion.bloqueo', 'sesion.cambiar_clave', 'reserva.crear', 'reserva.cancelar', 'reserva.checkout', 'pago.registrar',
+        'pago.anular', 'pago.en_linea', 'habitacion.crear', 'habitacion.eliminar', 'habitacion.limpieza', 'usuario.crear', 'reclamo.registrar', 'reclamo.responder',
+        'reserva.cambiar_habitacion', 'comprobante.emitir', 'comprobante.aceptado', 'comprobante.anular']) expect(acciones).toContain(a);
+      const panel = b.find(x => x.accion === 'reserva.crear' && x.usuarioId);
+      expect(panel).toMatchObject({ usuario: 'Recepción (Recepcionista)', entidad: 'reserva' });
+      expect(panel.ip).toBeTruthy();
+      expect(b.find(x => x.accion === 'reserva.crear' && !x.usuarioId).usuario).toBe('Huésped (web)');
+      const filtro = (await http.get('/api/gestion/bitacora?entidad=sesion&buscar=luis').set(A())).body as any[];
+      expect(filtro.length).toBeGreaterThan(0);
+      expect(filtro.every(x => x.entidad === 'sesion')).toBe(true);
+    });
+
+    it('nunca guarda contraseñas y no se puede modificar ni borrar', async () => {
+      const luis = (await http.get('/api/gestion/usuarios').set(A())).body.find((u: any) => u.email === 'luis@mareaalta.pe');
+      await http.put(`/api/gestion/usuarios/${luis.id}`).set(A()).send({ nombre: 'Luis', email: luis.email, rol: 'Recepcionista', activo: true, clave: 'OtraClave2026' }).expect(200);
+      const [e] = await db().query<any>(`SELECT datos::text AS datos FROM bitacora WHERE accion = 'usuario.editar' ORDER BY id DESC LIMIT 1`);
+      expect(e.datos).toContain('restablecida');
+      expect(e.datos).not.toMatch(/PBKDF2|OtraClave2026/);
+      await expect(db().query(`UPDATE bitacora SET descripcion = 'alterado'`)).rejects.toThrow(/no se puede modificar ni borrar/);
+      await expect(db().query(`DELETE FROM bitacora`)).rejects.toThrow(/no se puede modificar ni borrar/);
     });
   });
 });

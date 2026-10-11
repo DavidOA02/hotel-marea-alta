@@ -12,6 +12,7 @@
     "verificar": "node tools/verificar.js",
     "db": "node tools/configurar-bd.js",
     "db:demo": "node tools/configurar-bd.js --demo",
+    "db:migrar": "node tools/configurar-bd.js --migrar",
     "predev": "node tools/verificar.js",
     "dev": "concurrently -n API,WEB -c cyan,yellow \"npm run dev -w @marea/api\" \"npm run dev -w @marea/web\"",
     "build": "npm run build -w @marea/shared && npm run build -w @marea/api && npm run build -w @marea/web",

@@ -1,5 +1,6 @@
 import { cotizar, redondear, validarDocumento, validarTelefono, sumarDiasHabiles, diasEntre, enRango, sumarEstadias, horasParaLlegada,
-  reservaWebSchema, reservaPanelSchema, pagoSchema, usuarioSchema, cambiarClaveSchema, reclamacionSchema, primerError, hoyLima, sumarDias } from './index';
+  reservaWebSchema, reservaPanelSchema, pagoSchema, usuarioSchema, cambiarClaveSchema, reclamacionSchema, primerError, hoyLima, sumarDias,
+  recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema } from './index';
 
 describe('Tarifas e IGV', () => {
   it('incluye IGV para residentes', () => {
@@ -13,6 +14,27 @@ describe('Tarifas e IGV', () => {
       const c = cotizar(p, n, false);
       expect(redondear(c.subtotal + c.igv)).toBe(c.total);
     }
+  });
+});
+
+describe('Cambio de habitación: recálculo de tarifa', () => {
+  it('a la misma tarifa el total no cambia', () => {
+    expect(recalcularPorCambio(1950, 3, 2, 650, false)).toEqual(cotizar(650, 3, false));
+  });
+  it('mejora a suite: noche usada al precio original + noches restantes a la nueva tarifa', () => {
+    // 1 noche de Horizonte (650) + 2 de Pleamar (1090) = 2830
+    expect(recalcularPorCambio(1950, 3, 2, 1090, false)).toEqual({ noches: 3, subtotal: 2398.31, igv: 431.69, total: 2830, exoneradoIgv: false });
+  });
+  it('si el cambio es antes de llegar, se cobra todo con la nueva tarifa', () => {
+    expect(recalcularPorCambio(1950, 3, 3, 450, false).total).toBe(1350);
+  });
+  it('extranjero exonerado: sin IGV', () => {
+    const r = recalcularPorCambio(1652.54, 3, 2, 1090, true);
+    expect(r).toMatchObject({ igv: 0, exoneradoIgv: true });
+    expect(r.total).toBe(r.subtotal);
+  });
+  it('desglosar mantiene subtotal + IGV = total', () => {
+    for (const t of [0.01, 99.99, 1950, 2830.5, 12345.67]) { const d = desglosar(t, 1, false); expect(redondear(d.subtotal + d.igv)).toBe(d.total); }
   });
 });
 
@@ -82,6 +104,24 @@ describe('Esquemas Zod', () => {
     expect(usuarioSchema.safeParse({ nombre: 'Luis', email: 'l@h.pe', rol: 'Recepcionista', clave: 'corta' }).success).toBe(false);
     expect(usuarioSchema.safeParse({ nombre: 'Luis', email: 'l@h.pe', rol: 'Recepcionista', clave: 'Segura2026' }).success).toBe(true);
     expect(cambiarClaveSchema.safeParse({ claveActual: 'a', claveNueva: 'Nueva2026x', repetir: 'Otra2026x' }).success).toBe(false);
+  });
+  it('cambio de habitación: habitación, tarifa y motivo obligatorios', () => {
+    expect(cambioHabitacionSchema.safeParse({ habitacionId: '12', tarifa: 'Mantener', motivo: 'Aire acondicionado malogrado' }).success).toBe(true);
+    const r = cambioHabitacionSchema.safeParse({ habitacionId: 12, tarifa: 'Mantener', motivo: 'x' });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(primerError(r.error).campo).toBe('motivo');
+  });
+  it('factura: RUC válido, razón social y dirección; boleta y exportación no los piden', () => {
+    expect(comprobanteSchema.safeParse({ tipo: 'Boleta' }).success).toBe(true);
+    expect(comprobanteSchema.safeParse({ tipo: 'Factura', exportacion: true }).success).toBe(true);
+    const f = comprobanteSchema.safeParse({ tipo: 'Factura', ruc: '30123456789', razonSocial: 'X SAC', direccion: 'Lima' });
+    expect(f.success).toBe(false);
+    if (!f.success) expect(primerError(f.error).campo).toBe('ruc');
+    expect(comprobanteSchema.safeParse({ tipo: 'Factura', ruc: '20123456789', razonSocial: 'Viajes SAC', direccion: 'Av. Lima 1' }).success).toBe(true);
+  });
+  it('pago en línea: código MA + 7 dígitos y correo', () => {
+    expect(pagoEnLineaSchema.parse({ codigo: ' ma2600042 ', email: 'A@B.PE' })).toEqual({ codigo: 'MA2600042', email: 'a@b.pe' });
+    expect(pagoEnLineaSchema.safeParse({ codigo: '123', email: 'a@b.pe' }).success).toBe(false);
   });
   it('libro de reclamaciones: apoderado si es menor', () => {
     const r = { tipo: 'Reclamo', nombreCompleto: 'X', tipoDocumento: 'DNI', numeroDocumento: '12345678', domicilio: 'Lima', telefono: '9', email: 'x@y.pe',

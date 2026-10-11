@@ -1,9 +1,10 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCheck, Hourglass, OctagonAlert } from 'lucide-react';
 import { hoyLima } from '@marea/shared';
 import { fechaHora, fechaMedia, soles } from '@/lib/formato';
-import { useSesion } from '@/stores/sesion';
+import { ETIQUETAS } from '@marea/shared';
+import { apiPanel, useRefresco, useSesion } from '@/stores/sesion';
 import { BotonP, Cabecera, Cargando, Estado, Kpi, Modal, useDatos } from '@/components/panel/base';
 import { Tabla, columnas } from '@/components/panel/tabla';
 import { FormRespuesta } from '@/components/panel/formularios';
@@ -13,6 +14,9 @@ export default function Reclamaciones() {
   const admin = useSesion(s => s.usuario?.rol === 'Administrador');
   const [ver, setVer] = useState<any>(null);
   const [responder, setResponder] = useState<any>(null);
+  const [correos, setCorreos] = useState<any[] | null>(null);
+  const n = useRefresco(s => s.n);
+  useEffect(() => { setCorreos(null); if (ver) apiPanel(`/gestion/reclamaciones/${ver.numero}`).then(x => setCorreos(x.correos)).catch(() => setCorreos([])); }, [ver, n]);
   const hoy = hoyLima();
   if (!datos) return <Cargando />;
   const pend = datos.filter(r => r.estado === 'Pendiente');
@@ -42,6 +46,8 @@ export default function Reclamaciones() {
           <div className="sm:col-span-2"><dt className="text-xs text-muted">Detalle</dt><dd className="whitespace-pre-line">{ver.detalle}</dd></div>
           <div className="sm:col-span-2"><dt className="text-xs text-muted">Pedido</dt><dd className="whitespace-pre-line">{ver.pedido}</dd></div>
           {ver.respuesta && <div className="rounded-lg bg-ok-bg p-3 sm:col-span-2"><dt className="text-xs text-ok">Respuesta · {fechaHora(ver.fechaRespuesta)}</dt><dd className="whitespace-pre-line">{ver.respuesta}</dd></div>}
+          <div className="sm:col-span-2"><dt className="text-xs text-muted">Correos al consumidor</dt><dd>{!correos ? '…' : correos.length ? <ul className="mt-1 grid gap-1">{correos.map(c =>
+            <li key={c.id} className="flex items-center justify-between gap-2"><span>{ETIQUETAS[c.tipo] ?? c.tipo} · {c.para}<span className="block text-xs text-muted">{fechaHora(c.fechaEnvio ?? c.fechaCreacion)}</span></span><Estado valor={c.estado} /></li>)}</ul> : 'Sin correos (hoja anterior a los correos automáticos).'}</dd></div>
           {!admin && ver.estado === 'Pendiente' && <p className="text-muted sm:col-span-2">Solo un administrador puede responder.</p>}
         </dl>}
       </Modal>

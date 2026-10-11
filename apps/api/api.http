@@ -23,3 +23,35 @@ Authorization: Bearer {{token}}
 ### Reporte de un periodo (administrador)
 GET {{api}}/gestion/reportes?desde=2026-01-01&hasta=2026-12-31
 Authorization: Bearer {{token}}
+
+### Opciones para cambiar de habitación (reserva confirmada o en curso)
+GET {{api}}/gestion/reservas/MA2600042/cambio-habitacion
+Authorization: Bearer {{token}}
+
+### Cambiar de habitación (tarifa: Mantener | Recalcular)
+POST {{api}}/gestion/reservas/MA2600042/cambiar-habitacion
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "habitacionId": 12, "tarifa": "Mantener", "motivo": "Aire acondicionado malogrado" }
+
+### Emitir comprobante (Boleta | Factura con ruc, razonSocial y direccion | Factura con exportacion: true)
+POST {{api}}/gestion/reservas/MA2600042/comprobante
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "tipo": "Boleta" }
+
+### Registro de ventas
+GET {{api}}/gestion/comprobantes?desde=2026-10-01&hasta=2026-10-31
+Authorization: Bearer {{token}}
+
+### Bitácora de auditoría (administrador)
+GET {{api}}/gestion/bitacora?entidad=reserva&buscar=MA2600042
+Authorization: Bearer {{token}}
+
+### Pago en línea: crear la orden (como en «Mi reserva») y abrir /pago?orden=<id> en la web
+POST {{api}}/pagos-en-linea
+Content-Type: application/json
+
+{ "codigo": "MA2600042", "email": "correo-del-titular@correo.com" }

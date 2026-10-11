@@ -1,8 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { cotizar, diasEntre, HORAS_CANCELACION, horasParaLlegada, hoyLima } from '@marea/shared';
+import { cotizar, diasEntre, ETIQUETAS, HORAS_CANCELACION, horasParaLlegada, hoyLima, recalcularPorCambio, redondear } from '@marea/shared';
 import type { PoolClient } from 'pg';
-import { Db } from '../db/db.service';
+import { Db, Ejecutor } from '../db/db.service';
 import { falla } from '../comun/errores';
+import { Bitacora } from '../auditoria/bitacora.service';
+import { Correos } from '../correo/correos.service';
+import { cancelacionReserva, confirmacionReserva, soles } from '../correo/plantillas';
+import { pasarelaActiva } from '../config/env';
 
 export interface DatosCliente {
   nombres: string; apellidos: string; tipoDocumento: string; numeroDocumento: string;
@@ -13,29 +17,36 @@ export interface Solicitud {
   residencia: 'PE' | 'EXT'; clienteId?: number | null; cliente?: DatosCliente | null; canal: string;
   horaLlegada?: string | null; notas?: string | null; aceptaPublicidad?: boolean; registradoPor?: string | null; checkInInmediato?: boolean;
 }
+export interface CambioHabitacion { habitacionId: number; tarifa: 'Mantener' | 'Recalcular'; motivo: string }
+
+/** Rango que ocupa una reserva en su habitación actual (si cambió de habitación, desde el día del cambio). */
+const SQL_OCUPA = `daterange(coalesce(r.habitacion_desde, r.fecha_entrada), r.fecha_salida)`;
 
 /** Disponibilidad: habitaciones operativas sin reservas activas que se crucen con el rango. */
 export const SQL_LIBRES = `
   SELECT h.id, h.numero FROM habitaciones h
   WHERE h.tipo_habitacion_id = $1 AND h.estado = 'Operativa'
     AND NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.estado IN ('Confirmada','CheckIn')
-                    AND daterange(r.fecha_entrada, r.fecha_salida) && daterange($2::date, $3::date))`;
+                    AND ${SQL_OCUPA} && daterange($2::date, $3::date))`;
 
 /** Proyección única de reserva (lista y detalle). */
 export const SQL_RESERVA = `
-  SELECT r.codigo, r.estado, r.canal, r.cliente_id, c.nombres || ' ' || c.apellidos AS cliente,
+  SELECT r.id, r.codigo, r.estado, r.canal, r.cliente_id, c.nombres || ' ' || c.apellidos AS cliente,
          c.tipo_documento || ' ' || c.numero_documento AS documento, c.email, '+' || c.codigo_pais || ' ' || c.telefono AS telefono,
-         c.residencia, t.nombre AS tipo_habitacion, t.codigo AS tipo_codigo, h.numero AS habitacion, r.fecha_entrada, r.fecha_salida, r.noches,
-         r.huespedes, r.subtotal, r.igv, r.total, coalesce(p.pagado, 0) AS pagado, r.total - coalesce(p.pagado, 0) AS saldo, r.exonerado_igv,
-         r.hora_llegada, r.notas, r.fecha_reserva, r.fecha_check_in, r.fecha_check_out, r.registrado_por
+         c.residencia, t.nombre AS tipo_habitacion, t.codigo AS tipo_codigo, r.habitacion_id, h.numero AS habitacion, r.habitacion_desde,
+         r.fecha_entrada, r.fecha_salida, r.noches, r.huespedes, r.subtotal, r.igv, r.total, coalesce(p.pagado, 0) AS pagado,
+         r.total - coalesce(p.pagado, 0) AS saldo, r.exonerado_igv, r.hora_llegada, r.notas, r.fecha_reserva, r.fecha_check_in,
+         r.fecha_check_out, r.fecha_cancelacion, r.registrado_por
   FROM reservas r JOIN clientes c ON c.id = r.cliente_id JOIN habitaciones h ON h.id = r.habitacion_id
   JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
   LEFT JOIN LATERAL (SELECT sum(monto_soles) AS pagado FROM pagos WHERE reserva_id = r.id AND estado = 'Aprobado') p ON true`;
 
+export const dmy = (iso: string) => iso.split('-').reverse().join('/');
+
 @Injectable()
 export class ReservasService {
   private readonly log = new Logger('Reservas');
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Db, private readonly bitacora: Bitacora, private readonly correos: Correos) {}
 
   async crear(s: Solicitud) {
     const tipo = await this.db.uno<{ id: number; nombre: string; capacidad: number; precioNoche: number }>(
@@ -96,6 +107,13 @@ export class ReservasService {
     const { codigo } = (await this.db.uno<{ codigo: string }>(
       `UPDATE reservas SET codigo = 'MA' || to_char(now(), 'YY') || lpad(id::text, 5, '0') WHERE id = $1 RETURNING codigo`, [res.id], c))!;
 
+    // Bitácora y correo de confirmación en la misma transacción: si la reserva no se guarda, tampoco ellos
+    const datos = (await this.db.uno<any>(SQL_RESERVA + ' WHERE r.id = $1', [res.id], c))!;
+    await this.bitacora.registrar({ accion: 'reserva.crear', entidad: 'reserva', entidadId: codigo,
+      descripcion: `Reserva ${codigo} (${ETIQUETAS[s.canal] ?? s.canal}) para ${datos.cliente}: ${tipo.nombre} ${libre.numero} del ${dmy(s.fechaEntrada)} al ${dmy(s.fechaSalida)} · ${soles(q.total)}${s.checkInInmediato ? ' · con check-in inmediato' : ''}`,
+      datos: { clienteId, habitacion: libre.numero, fechaEntrada: s.fechaEntrada, fechaSalida: s.fechaSalida, huespedes: s.huespedes, total: q.total, canal: s.canal } }, c);
+    await this.correos.encolar({ tipo: 'confirmacion', para: datos.email, reservaId: res.id, ...confirmacionReserva(datos, !!pasarelaActiva()) }, c);
+
     this.log.log(`Reserva ${codigo} (${s.canal}) ${tipo.nombre} ${libre.numero} del ${s.fechaEntrada} al ${s.fechaSalida}`);
     return { codigo, estado, tipoHabitacion: tipo.nombre, habitacion: libre.numero, fechaEntrada: s.fechaEntrada, fechaSalida: s.fechaSalida,
       huespedes: s.huespedes, ...q };
@@ -118,23 +136,133 @@ export class ReservasService {
     return { puede: true, motivo: null };
   }
 
-  async consultarPublica(codigo: string, email: string) {
+  /** Reserva vista por el huésped: se identifica con el código y el correo del titular. */
+  async buscarPublica(codigo: string, email: string) {
     const r = await this.db.uno<any>(SQL_RESERVA + ' WHERE r.codigo = $1 AND lower(c.email) = lower($2)', [codigo.trim().toUpperCase(), email.trim()]);
     if (!r) throw falla(404, 'No encontramos una reserva con ese código y correo.');
+    return r;
+  }
+
+  static puedePagarEnLinea(r: { estado: string; saldo: number }) {
+    return !!pasarelaActiva() && ['Confirmada', 'CheckIn'].includes(r.estado) && r.saldo > 0.009;
+  }
+
+  async consultarPublica(codigo: string, email: string) {
+    const r = await this.buscarPublica(codigo, email);
     const p = ReservasService.politicaCancelacion(r.estado, r.fechaEntrada);
     return { codigo: r.codigo, estado: r.estado, titular: r.cliente, tipoHabitacion: r.tipoHabitacion, habitacion: r.habitacion,
       fechaEntrada: r.fechaEntrada, fechaSalida: r.fechaSalida, noches: r.noches, huespedes: r.huespedes, subtotal: r.subtotal, igv: r.igv,
-      total: r.total, exoneradoIgv: r.exoneradoIgv, pagado: r.pagado, fechaReserva: r.fechaReserva, puedeCancelar: p.puede, motivoNoCancelable: p.motivo };
+      total: r.total, exoneradoIgv: r.exoneradoIgv, pagado: r.pagado, saldo: r.saldo, fechaReserva: r.fechaReserva, puedeCancelar: p.puede, motivoNoCancelable: p.motivo,
+      puedePagarEnLinea: ReservasService.puedePagarEnLinea(r) };
   }
 
   async cancelarPublica(codigo: string, email: string) {
-    const r = await this.db.uno<any>(SQL_RESERVA + ' WHERE r.codigo = $1 AND lower(c.email) = lower($2)', [codigo.trim().toUpperCase(), email.trim()]);
-    if (!r) throw falla(404, 'No encontramos una reserva con ese código y correo.');
+    const r = await this.buscarPublica(codigo, email);
     const p = ReservasService.politicaCancelacion(r.estado, r.fechaEntrada);
     if (!p.puede) throw falla(409, p.motivo!);
-    await this.db.query(`UPDATE reservas SET estado = 'Cancelada', fecha_cancelacion = now() WHERE codigo = $1`, [r.codigo]);
+    await this.cancelar(r, `Reserva ${r.codigo} cancelada por el huésped desde «Mi reserva»`);
     this.log.log(`Reserva ${r.codigo} cancelada por el huésped`);
-    return { codigo: r.codigo, estado: 'Cancelada', mensaje: 'Tu reserva fue cancelada sin costo.' };
+    return { codigo: r.codigo, estado: 'Cancelada', mensaje: 'Tu reserva fue cancelada sin costo. Te enviamos la confirmación por correo.' };
+  }
+
+  /** Cancela una reserva confirmada, la registra en la bitácora y avisa al huésped por correo. */
+  async cancelar(r: any, descripcion: string) {
+    await this.db.transaccion(async c => {
+      const x = await c.query(`UPDATE reservas SET estado = 'Cancelada', fecha_cancelacion = now() WHERE id = $1 AND estado = 'Confirmada'`, [r.id]);
+      if (!x.rowCount) throw falla(409, 'La reserva cambió de estado mientras tanto. Vuelve a abrirla.');
+      await this.bitacora.registrar({ accion: 'reserva.cancelar', entidad: 'reserva', entidadId: r.codigo, descripcion }, c);
+      await this.correos.encolar({ tipo: 'cancelacion', para: r.email, reservaId: r.id, ...cancelacionReserva(r) }, c);
+    });
+  }
+
+  async reenviarConfirmacion(codigo: string) {
+    const r = await this.db.uno<any>(SQL_RESERVA + ' WHERE r.codigo = $1', [codigo.toUpperCase()]);
+    if (!r) throw falla(404, 'Reserva no encontrada.');
+    if (!['Confirmada', 'CheckIn'].includes(r.estado)) throw falla(409, 'Solo se reenvía la confirmación de reservas vigentes.');
+    await this.db.transaccion(async c => {
+      await this.correos.encolar({ tipo: 'confirmacion', para: r.email, reservaId: r.id, ...confirmacionReserva(r, !!pasarelaActiva()) }, c);
+      await this.bitacora.registrar({ accion: 'correo.reenviar', entidad: 'reserva', entidadId: r.codigo, descripcion: `Confirmación de ${r.codigo} reenviada a ${r.email}` }, c);
+    });
+    return { codigo: r.codigo, mensaje: `Confirmación enviada a ${r.email}.` };
+  }
+
+  /* ---------------- Cambio de habitación ---------------- */
+
+  /** Reserva lista para cambiar de habitación. «desde» es hoy si la estadía ya empezó; si no, el día de llegada. */
+  private async paraCambio(codigo: string, c?: Ejecutor) {
+    const r = await this.db.uno<any>(`
+      SELECT r.id, r.codigo, r.estado, r.fecha_entrada, r.fecha_salida, r.noches, r.huespedes, r.subtotal, r.igv, r.total, r.exonerado_igv,
+             r.habitacion_id, h.numero AS habitacion, h.tipo_habitacion_id AS tipo_id, t.nombre AS tipo_habitacion,
+             EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND k.estado NOT IN ('Rechazado','Anulado')) AS tiene_comprobante
+      FROM reservas r JOIN habitaciones h ON h.id = r.habitacion_id JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
+      WHERE r.codigo = $1 ${c ? 'FOR UPDATE OF r' : ''}`, [codigo.toUpperCase()], c);
+    if (!r) throw falla(404, 'Reserva no encontrada.');
+    if (!['Confirmada', 'CheckIn'].includes(r.estado)) throw falla(409, 'Solo se cambia de habitación en reservas confirmadas o con el huésped en el hotel.');
+    const hoy = hoyLima();
+    const desde: string = r.fechaEntrada > hoy ? r.fechaEntrada : hoy;
+    if (desde >= r.fechaSalida) throw falla(409, 'La estadía termina hoy: no quedan noches por cambiar.');
+    return { ...r, desde, nochesRestantes: diasEntre(desde, r.fechaSalida) };
+  }
+
+  /** Habitaciones a las que se puede pasar (libres desde «desde» hasta la salida), con el total si se recalcula la tarifa. */
+  async opcionesCambio(codigo: string) {
+    const r = await this.paraCambio(codigo);
+    const libres = await this.db.query<any>(`
+      SELECT h.id, h.numero, h.piso, h.estado_limpieza, t.codigo AS tipo_codigo, t.nombre AS tipo, t.capacidad, t.precio_noche
+      FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
+      WHERE h.estado = 'Operativa' AND h.id <> $1 AND t.capacidad >= $2
+        AND NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.id <> $3 AND r.estado IN ('Confirmada','CheckIn')
+                        AND ${SQL_OCUPA} && daterange($4::date, $5::date))
+      ORDER BY (h.tipo_habitacion_id = $6) DESC, t.precio_noche, h.piso, h.numero`,
+      [r.habitacionId, r.huespedes, r.id, r.desde, r.fechaSalida, r.tipoId]);
+    return {
+      codigo: r.codigo, estado: r.estado, habitacion: r.habitacion, tipoHabitacion: r.tipoHabitacion, desde: r.desde, nochesRestantes: r.nochesRestantes,
+      total: r.total, tieneComprobante: r.tieneComprobante,
+      opciones: libres.map(h => ({ ...h, totalRecalculado: recalcularPorCambio(r.total, r.noches, r.nochesRestantes, h.precioNoche, r.exoneradoIgv).total }))
+    };
+  }
+
+  async cambiarHabitacion(codigo: string, d: CambioHabitacion, registradoPor: string) {
+    return this.db.transaccion(async c => {
+      const r = await this.paraCambio(codigo, c);
+      const nueva = await this.db.uno<any>(`SELECT h.id, h.numero, h.estado, h.tipo_habitacion_id AS tipo_id, t.nombre AS tipo, t.capacidad, t.precio_noche
+        FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id WHERE h.id = $1`, [d.habitacionId], c);
+      if (!nueva) throw falla(404, 'La habitación elegida no existe.', 'habitacionId');
+      if (nueva.id === r.habitacionId) throw falla(409, 'Elige una habitación distinta de la actual.', 'habitacionId');
+      if (nueva.estado !== 'Operativa') throw falla(409, `La habitación ${nueva.numero} no está operativa.`, 'habitacionId');
+      if (r.huespedes > nueva.capacidad) throw falla(409, `${nueva.tipo} admite hasta ${nueva.capacidad} huéspedes.`, 'habitacionId');
+      // Misma fila que las reservas nuevas de ese tipo: nadie puede tomar la habitación mientras se hace el cambio
+      await c.query('SELECT pg_advisory_xact_lock(7731, $1)', [nueva.tipoId]);
+      const choque = await this.db.uno<{ codigo: string }>(`SELECT r.codigo FROM reservas r WHERE r.habitacion_id = $1 AND r.id <> $2
+        AND r.estado IN ('Confirmada','CheckIn') AND ${SQL_OCUPA} && daterange($3::date, $4::date) LIMIT 1`, [nueva.id, r.id, r.desde, r.fechaSalida], c);
+      if (choque) throw falla(409, `La habitación ${nueva.numero} no está libre del ${dmy(r.desde)} al ${dmy(r.fechaSalida)}.`, 'habitacionId');
+
+      let importe = { subtotal: r.subtotal, igv: r.igv, total: r.total };
+      if (d.tarifa === 'Recalcular') {
+        if (r.tieneComprobante) throw falla(409, 'La reserva ya tiene comprobante electrónico: cambia de habitación manteniendo la tarifa.', 'tarifa');
+        importe = recalcularPorCambio(r.total, r.noches, r.nochesRestantes, nueva.precioNoche, r.exoneradoIgv);
+      }
+      await c.query(`UPDATE reservas SET habitacion_id = $2, habitacion_desde = $3, subtotal = $4, igv = $5, total = $6 WHERE id = $1`,
+        [r.id, nueva.id, r.desde > r.fechaEntrada ? r.desde : null, importe.subtotal, importe.igv, importe.total]);
+      await c.query(`INSERT INTO cambios_habitacion (reserva_id, habitacion_anterior_id, habitacion_nueva_id, desde, tarifa, total_anterior, total_nuevo, motivo, registrado_por)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [r.id, r.habitacionId, nueva.id, r.desde, d.tarifa, r.total, importe.total, d.motivo, registradoPor]);
+      if (r.estado === 'CheckIn') await c.query(`UPDATE habitaciones SET estado_limpieza = 'Sucia' WHERE id = $1`, [r.habitacionId]);
+
+      const tarifa = d.tarifa === 'Recalcular' ? `tarifa recalculada ${soles(r.total)} → ${soles(importe.total)}` : 'misma tarifa';
+      await this.bitacora.registrar({ accion: 'reserva.cambiar_habitacion', entidad: 'reserva', entidadId: r.codigo,
+        descripcion: `Cambio de habitación ${r.habitacion} → ${nueva.numero} desde el ${dmy(r.desde)} (${tarifa}). Motivo: ${d.motivo}`,
+        datos: { de: r.habitacion, a: nueva.numero, desde: r.desde, tarifa: d.tarifa, totalAnterior: r.total, totalNuevo: importe.total, motivo: d.motivo } }, c);
+
+      const { pagado } = (await this.db.uno<{ pagado: number }>(`SELECT coalesce(sum(monto_soles), 0) AS pagado FROM pagos WHERE reserva_id = $1 AND estado = 'Aprobado'`, [r.id], c))!;
+      const saldo = redondear(importe.total - pagado);
+      const avisos = [r.estado === 'CheckIn' ? `La habitación ${r.habitacion} pasó a «Por limpiar».` : null,
+        saldo < -0.009 ? `El huésped tiene un saldo a favor de ${soles(-saldo)}.` : null].filter(Boolean);
+      this.log.log(`Reserva ${r.codigo}: habitación ${r.habitacion} → ${nueva.numero} (${d.tarifa})`);
+      return { codigo: r.codigo, habitacionAnterior: r.habitacion, habitacion: nueva.numero, tipoHabitacion: nueva.tipo, desde: r.desde,
+        totalAnterior: r.total, total: importe.total, saldo,
+        mensaje: `Huésped pasado a la habitación ${nueva.numero}${d.tarifa === 'Recalcular' ? `. Nuevo total: ${soles(importe.total)}` : ''}.`,
+        advertencia: avisos.length ? avisos.join(' ') : null };
+    });
   }
 
   static hoy() { return hoyLima(); }

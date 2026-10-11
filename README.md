@@ -5,7 +5,7 @@ Sitio web del hotel con reservas en línea y sistema de gestión hotelera con lo
 | Capa | Tecnologías | Carpeta |
 |---|---|---|
 | Web pública + panel | **Next.js 16.3** (App Router), **React 19**, **Tailwind 4**, **Zustand**, **TanStack Table 9**, **React Hook Form + Zod**, **react-pdf**, carrusel **Embla**, Recharts | `apps/web` |
-| API | **NestJS 11**, **pg** (PostgreSQL), **ssh2** (túnel opcional), JWT | `apps/api` |
+| API | **NestJS 11**, **pg** (PostgreSQL), **ssh2** (túnel opcional), JWT, **nodemailer** (correos) | `apps/api` |
 | Reglas compartidas | Esquemas **Zod**, IGV, documentos peruanos y métricas hoteleras | `packages/shared` |
 | Pruebas | **Jest** + supertest contra PostgreSQL real | `*/src/**/*.spec.ts`, `apps/api/test` |
 | Base de datos | PostgreSQL 14+ | `database` |
@@ -45,6 +45,7 @@ El primer ingreso obliga a cambiar la contraseña. El recuadro «Usuarios de pru
 | `npm run dev` | API (NestJS en modo *watch*) y web (Next.js) a la vez; antes ejecuta `verificar` |
 | `npm run verificar` | Revisa Node, dependencias, PostgreSQL y puertos libres |
 | `npm run db` / `npm run db:demo` | Crea la base de datos, vacía o con datos de demostración (**borra la anterior**) |
+| `npm run db:migrar` | Aplica `database/03_mejoras.sql` a la base existente **sin borrar datos** (se puede repetir) |
 | `npm test` | Pruebas Jest unitarias (paquete compartido y API) |
 | `npm run test:e2e` | Pruebas de punta a punta de la API contra una base PostgreSQL de prueba |
 | `npm run build` y luego `npm start` | Compilación de producción y arranque |
@@ -68,9 +69,9 @@ Los errores de la API vuelven como `{ mensaje, campo }`, y el formulario marca e
   - Habitaciones con tarifas reales y precios en S/ o US$.
   - Galería y testimonios con carrusel.
   - Formulario de reserva con disponibilidad en vivo.
-  - Mi reserva, Libro de Reclamaciones (Ley 29571) y privacidad.
+  - Mi reserva (con pago en línea), Libro de Reclamaciones (Ley 29571) y privacidad.
 - **Panel** (`/panel`):
-  - Dashboard, recepción, reservas, habitaciones (tablero por piso), clientes, caja, reportes, tarifas, reclamaciones, usuarios y mi cuenta.
+  - Dashboard, recepción, reservas, habitaciones (tablero por piso), clientes, caja, comprobantes electrónicos, reportes, tarifas, reclamaciones, usuarios, bitácora de auditoría y mi cuenta.
 - **Tailwind 4**: el tema va en `@theme` y las clases propias se declaran con `@utility`, que en v4 reemplaza el uso de `@apply` sobre `@layer components`.
 
 ### Zustand
@@ -118,14 +119,93 @@ SSH_LLAVE=C:\Users\tu-usuario\.ssh\id_ed25519
 La API abre el túnel con `ssh2` y se conecta a `PGHOST:PGPORT` desde el servidor, sin exponer la base a Internet.
 
 ### Jest
-- `packages/shared`: tarifas e IGV, documentos, fechas hábiles, prorrateo de métricas y esquemas Zod.
-- `apps/api` (unitarias): contraseñas y política de cancelación.
-- `apps/api/test` (de punta a punta, contra PostgreSQL real):
+- `packages/shared`: tarifas e IGV, recálculo por cambio de habitación, documentos, fechas hábiles, prorrateo de métricas y esquemas Zod.
+- `apps/api` (unitarias): contraseñas, política de cancelación y **contratos de las integraciones** con `fetch` simulado (Culqi, Mercado Pago y la firma de su webhook, Niubiz y Nubefact).
+- `apps/api/test` (de punta a punta, contra PostgreSQL real; leen `apps/api/.env` y fuerzan los modos simulados, así nunca envían correos ni cobran):
   - Reservas, validaciones y libro de reclamaciones.
   - Roles, bloqueo de cuenta y renovación de sesión.
   - Walk-in → pago → check-out.
   - Anulación de pagos, CRUD de habitaciones y clientes.
   - **Concurrencia**: 6 personas reservan a la vez las 4 suites y se confirman exactamente 4, sin cruces.
+  - Correos encolados (y su HTML escapado), cambio de habitación (incluido el huésped en curso sin falsos cruces), pagos en línea **idempotentes** (avisos repetidos o simultáneos registran un solo pago), boletas, facturas y exportación con **correlativo sin huecos** aunque se emitan a la vez, y bitácora inmodificable.
+
+---
+
+## Correos, pagos en línea, facturación, cambio de habitación y bitácora
+
+Todo funciona en desarrollo **sin credenciales**: los correos quedan como «Simulado», la pasarela de pago es simulada (botones «aprobar» o «rechazar») y el OSE simulado acepta los comprobantes sin validez tributaria. En producción, los modos simulados se desactivan solos. Las variables están documentadas en `apps/api/.env.ejemplo`, y al arrancar la API muestra qué está activo.
+
+Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
+
+### Correos automáticos (`apps/api/src/correo`)
+- Se envían:
+  - **Al reservar** (web o panel): la confirmación.
+  - **Al cancelar**: el aviso de cancelación.
+  - **Con un pago en línea**: el recibo del pago.
+  - **Al aceptarse un comprobante**: el comprobante electrónico.
+  - **Por el Libro de Reclamaciones**: la constancia de la hoja y la **respuesta** que registra el administrador.
+- **Bandeja de salida** (tabla `correos`): el correo se guarda en la misma transacción que la operación y un proceso lo envía por SMTP (`nodemailer`) con reintentos (1, 5, 15 y 60 min). Un servidor de correo caído nunca hace fallar una reserva.
+- En la ficha de la reserva y en la hoja de reclamación se ve si cada correo se envió. Se puede reenviar la confirmación o reintentar un correo fallido.
+- Las plantillas escapan todo dato que escribe el usuario (evita inyección de HTML).
+
+### Pagos en línea (`apps/api/src/pagos-en-linea`)
+- **Flujo**: «Mi reserva» o la confirmación de la reserva → **Pagar en línea** → página `/pago`.
+  - Cada intento es una *orden* con un id imposible de adivinar.
+  - El **monto lo fija la API** (el saldo de la reserva).
+  - El resultado **siempre se verifica con la pasarela**, nunca con lo que diga el navegador.
+- **Pasarelas** (`PASARELA=…`):
+  - **Culqi**: Checkout Custom tokeniza la tarjeta o Yape en el navegador y la API crea el cargo con la llave secreta.
+  - **Mercado Pago**: Checkout Pro por redirección. El pago se confirma consultando `/v1/payments` al volver y con el webhook `POST /api/webhooks/mercadopago`, que valida la firma `x-signature`.
+  - **Niubiz**: botón de pago web. Primero se obtienen el token de seguridad y la sesión; luego el formulario de Niubiz envía el `transactionToken` a la API, que autoriza (`ACTION_CODE 000`) y devuelve al huésped a la web.
+- **Idempotente**: si la pasarela avisa dos veces (retorno y webhook), el pago se registra una sola vez. Un pago aprobado se registra aunque la orden haya vencido.
+- La reserva se **bloquea** mientras se registra cualquier pago, así dos cobros simultáneos (web y recepción) no superan el saldo.
+- Si aun así queda saldo a favor, se marca en la bitácora para devolverlo.
+- Anular en Caja un pago hecho por pasarela avisa que la devolución se hace desde el panel de la pasarela.
+
+### Facturación electrónica SUNAT (`apps/api/src/facturacion`)
+- **Cuándo**: con la reserva pagada por completo, en la ficha → **Emitir**.
+- **Qué se emite**:
+  - **Boleta** con el DNI, CE o pasaporte del huésped.
+  - **Factura** con RUC, razón social y dirección.
+  - Para extranjeros no domiciliados (exonerados de IGV), **factura de exportación de servicios de hospedaje** (operación 0202, afectación 40, identificados con pasaporte).
+- **Correlativo** por serie (`series_comprobante`) sin huecos ni duplicados, aunque se emita a la vez desde varias PC.
+- Una reserva tiene **un solo comprobante vigente**: los rechazados y anulados no cuentan.
+- **OSE** (`FACTURACION=nubefact`): Nubefact genera el XML UBL 2.1, lo firma y lo envía a SUNAT.
+  - Las boletas quedan «Pendiente» hasta el resumen diario.
+  - Un proceso consulta los pendientes cada 5 minutos, y también se puede pulsar «Actualizar estado».
+  - Al aceptarse, el comprobante se envía por correo al cliente con sus enlaces PDF y XML.
+- **Anulación** (solo administrador): comunicación de baja hasta 7 días después de la emisión. Pasado ese plazo corresponde una nota de crédito, que aún no está incluida.
+- **Pantalla** «Comprobantes»: registro de ventas por fechas con totales (gravada, exportación, IGV) y CSV. Para Power BI está la vista `vw_comprobantes_powerbi`.
+
+### Cambio de habitación de una reserva en curso
+- **Dónde**: ficha de la reserva (confirmada o con el huésped en el hotel) → **Cambiar habitación**.
+- **Opciones**: solo habitaciones libres para las noches restantes y con capacidad suficiente.
+- **Tarifa**:
+  - **Mantener**: cortesía, mantenimiento o reubicación.
+  - **Recalcular**: las noches ya usadas conservan su precio y las restantes toman la tarifa nueva. No se permite si ya hay comprobante emitido.
+- **Huésped en el hotel**: el cambio rige desde hoy.
+  - La reserva guarda `habitacion_desde` y la restricción anti-cruces de PostgreSQL solo considera ese tramo, así que las noches ya pasadas no bloquean a la nueva habitación.
+  - La habitación anterior pasa a «Por limpiar».
+- **Historial** en `cambios_habitacion` y en la bitácora, con el motivo.
+
+### Bitácora de auditoría (`apps/api/src/auditoria`)
+- **Qué registra**: quién hizo qué, cuándo y desde qué IP.
+  - Sesiones: ingresos, fallos y bloqueos.
+  - Reservas, pagos y anulaciones.
+  - Check-out con saldo y cambios de habitación.
+  - Tarifas, con el precio anterior y el nuevo.
+  - Habitaciones, clientes y usuarios, con los campos que cambiaron.
+  - Reclamos, comprobantes y correos reenviados.
+- **Cómo**: el usuario y la IP salen de un contexto por petición (`AsyncLocalStorage`). El registro se guarda **en la misma transacción** que la operación.
+- **Solo inserción**: un trigger de PostgreSQL rechaza `UPDATE`, `DELETE` y `TRUNCATE`. Las contraseñas nunca se guardan; solo consta que fueron restablecidas.
+- **Pantalla** «Bitácora» (solo administrador): filtros, detalle con el valor anterior y el nuevo, y exportación a CSV. Además, la ficha de cada reserva muestra su historial.
+
+### Antes de producción
+Las integraciones reales se escribieron según la documentación oficial y sus contratos están probados con `fetch` simulado. **Aún no se han probado contra los servicios reales**: valídalas con las cuentas de prueba (sandbox) de cada proveedor.
+- **Niubiz**: los campos antifraude `MDD` los define Niubiz para cada comercio; ajústalos en `pasarelas.ts`.
+- **Culqi**: las tarjetas que piden 3-D Secure se rechazan con un mensaje claro (el flujo 3DS no está implementado).
+- **Nubefact**: revisa con la cuenta DEMO los códigos de la exportación (`sunat_transaction`, `tipo_de_igv`, `total_inafecta` en `proveedores.ts`). Confirma con tu contador el tratamiento tributario del hospedaje a no domiciliados.
+- **Mercado Pago**: necesita `API_URL_PUBLICA` con HTTPS accesible desde Internet para los webhooks.
 
 ---
 
@@ -160,16 +240,22 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
 | «El puerto 3000/4000 ya está en uso» | Cierra la otra ventana con `npm run dev` |
 | Error de CORS | Agrega tu URL en `CORS_ORIGENES` (`apps/api/.env`) |
 | «Cerramos tu sesión por inactividad» | Pasaron 30 min sin uso; ajusta `NEXT_PUBLIC_PANEL_INACTIVIDAD_MIN` en `apps/web/.env.local` |
+| Error `relation "bitacora" does not exist` (o `correos`, `comprobantes`…) | La base es anterior a las mejoras: ejecuta `npm run db:migrar` |
+| Los correos aparecen como «Simulado» | No hay `SMTP_HOST` en `apps/api/.env`: se registran pero no se envían |
+| No aparece «Pagar en línea» | Revisa `PASARELA` y sus credenciales (al arrancar, la API indica qué pasarela está activa) |
+| `npm run test:e2e` falla por la contraseña de postgres | Las pruebas leen `apps/api/.env`: ejecuta antes `npm run db` para guardarla |
 
 ## Publicar
 - **Web**: Vercel u otro hosting de Node. Define `NEXT_PUBLIC_API_URL` y `NEXT_PUBLIC_WHATSAPP`.
-- **API**: VPS o Render. Define `JWT_SECRETO` y `JWT_SECRETO_RENOVACION` (textos largos y aleatorios; la API no arranca en producción sin ellos), las variables `PG*` y `CORS_ORIGENES`.
+- **API**: VPS o Render.
+  - Define `JWT_SECRETO` y `JWT_SECRETO_RENOVACION` (textos largos y aleatorios; la API no arranca en producción sin ellos), las variables `PG*` y `CORS_ORIGENES`.
+  - Define también `WEB_URL`, `API_URL_PUBLICA`, `SMTP_*`, `PASARELA` con sus credenciales y `FACTURACION` con las de Nubefact.
+  - Con `NODE_ENV=production` no se activan la pasarela ni el OSE simulados.
 - **Base de datos**: cualquier PostgreSQL 14+ con permiso para `CREATE EXTENSION btree_gist`.
 - **Usuarios**: cambia las contraseñas iniciales.
 
 ## Mejoras posibles
-- Correos automáticos para la confirmación y la respuesta a reclamos.
-- Pasarela de pago (Niubiz, Culqi, Mercado Pago).
-- Facturación electrónica SUNAT mediante un OSE.
-- Cambio de habitación de una reserva en curso.
-- Bitácora de auditoría.
+- Notas de crédito electrónicas (anulación pasado el plazo de baja y devoluciones parciales).
+- Flujo 3-D Secure de Culqi y devoluciones automáticas desde el panel.
+- Recordatorio por correo dos días antes de la llegada y encuesta tras el check-out.
+- Panel de correos fallidos con alerta en la campana.
