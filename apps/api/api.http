@@ -1,0 +1,25 @@
+### Pruebas rápidas de la API (extensión REST Client de VS Code: clic en «Send Request»)
+@api = http://localhost:4000/api
+
+### Estado
+GET {{api}}/salud
+
+### Disponibilidad
+GET {{api}}/disponibilidad?entrada=2026-12-20&salida=2026-12-23&huespedes=2
+
+### Iniciar sesión (copia el accessToken en @token)
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{ "email": "admin@mareaalta.pe", "clave": "Admin2026!" }
+
+### 
+@token = PEGA_AQUI_EL_TOKEN
+
+### Dashboard
+GET {{api}}/gestion/dashboard
+Authorization: Bearer {{token}}
+
+### Reporte de un periodo (administrador)
+GET {{api}}/gestion/reportes?desde=2026-01-01&hasta=2026-12-31
+Authorization: Bearer {{token}}

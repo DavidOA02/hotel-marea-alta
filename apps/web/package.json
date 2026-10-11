@@ -1,0 +1,35 @@
+{
+  "name": "@marea/web",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Web pública y panel del Hotel Marea Alta — Next.js 16 + React 19 + Tailwind 4",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "5.9.1",
+    "@marea/shared": "2.0.0",
+    "@react-pdf/renderer": "4.9.0",
+    "@tanstack/react-table": "9.2.6",
+    "embla-carousel-react": "8.6.0",
+    "lucide-react": "^0.546.0",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-hook-form": "7.89.0",
+    "recharts": "^3.2.0",
+    "zod": "4.6.5",
+    "zustand": "5.0.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5.9.0"
+  }
+}

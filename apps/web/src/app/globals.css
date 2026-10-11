@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+/* ==========================================================
+   Tema del Hotel Marea Alta (Tailwind 4: variables en @theme)
+   Colores verificados con contraste WCAG AA (≥ 4.5:1).
+   ========================================================== */
+@theme {
+  --color-ocean: #12303A;
+  --color-ocean-2: #183C48;
+  --color-ocean-3: #0C222A;
+  --color-gold: #B08D57;
+  --color-gold-dark: #7A5C30;
+  --color-gold-light: #E2CBA2;
+  --color-gold-soft: #F4ECDD;
+  --color-sand: #F6F3EE;
+  --color-stone: #EDE8DF;
+  --color-ink: #1E2A2E;
+  --color-muted: #5A635F;
+  --color-line: #D9D2C5;
+  --color-wa: #187A41;
+  --color-ok: #1F7A45;
+  --color-ok-bg: #E4F3EA;
+  --color-warn: #8A5A12;
+  --color-warn-bg: #FBF0DA;
+  --color-bad: #A2321A;
+  --color-bad-bg: #FBE6E0;
+  --color-info: #1D5F86;
+  --color-info-bg: #E2EFF7;
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Jost", "Segoe UI", system-ui, sans-serif;
+}
+
+@layer base {
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+  body { @apply bg-sand text-ink font-sans antialiased; font-weight: 300; }
+  :focus-visible { outline: 2px solid var(--color-gold); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation: none !important; transition: none !important; } }
+}
+
+/* Clases propias: en Tailwind 4 se declaran con @utility para poder combinarlas con @apply */
+@utility eyebrow {
+  @apply text-xs uppercase tracking-[0.28em] font-normal text-gold-dark;
+}
+@utility eyebrow-claro {
+  @apply text-xs uppercase tracking-[0.28em] font-normal text-gold-light;
+}
+@utility display {
+  @apply font-serif font-normal text-ocean leading-[1.08]; font-size: clamp(2.3rem, 4.4vw, 3.9rem); text-wrap: balance;
+}
+@utility contenedor {
+  @apply mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-8;
+}
+@utility seccion {
+  @apply py-12 md:py-16 lg:py-20;
+}
+@utility btn {
+  @apply inline-flex min-h-12 items-center justify-center gap-2 px-7 text-[0.78rem] font-medium uppercase tracking-[0.2em] transition-colors disabled:opacity-60 disabled:cursor-not-allowed;
+}
+@utility btn-oro {
+  @apply btn bg-gold-dark text-white hover:bg-[#5f4727];
+}
+@utility btn-oceano {
+  @apply btn bg-ocean text-white hover:bg-ocean-2;
+}
+@utility btn-borde {
+  @apply btn border border-ocean text-ocean hover:bg-ocean hover:text-white;
+}
+@utility btn-wa {
+  @apply btn bg-wa text-white hover:bg-[#135F33];
+}
+@utility campo-label {
+  @apply block text-[0.68rem] font-medium uppercase tracking-[0.22em] text-gold-dark;
+}
+@utility campo {
+  @apply mt-1.5 w-full border-0 border-b border-line bg-transparent px-0 py-2 font-serif text-xl text-ocean outline-none transition-colors focus:border-gold aria-[invalid=true]:border-bad;
+}
+@utility campo-error {
+  @apply mt-1 text-sm text-bad;
+}
+@utility tarjeta {
+  @apply rounded-2xl border border-line bg-white;
+}

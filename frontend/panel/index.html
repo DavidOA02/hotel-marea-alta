@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es-PE">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0C222A">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="../vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="panel.css">
+  <title>Ingresar · Panel Marea Alta</title>
+  <script src="../js/config.js" defer></script>
+  <script src="../js/api.js" defer></script>
+  <script src="../vendor/bootstrap/bootstrap.bundle.min.js" defer></script>
+  <script src="js/core.js" defer></script>
+  <script src="js/login.js" defer></script>
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-visual" aria-hidden="true">
+      <div class="brand">Marea Alta<small>Paracas · Perú</small></div>
+      <div>
+        <p class="login-headline">Panel de gestión del hotel</p>
+        <p class="mt-3">Reservas, recepción, habitaciones, caja y reportes en un solo lugar.</p>
+      </div>
+      <p class="small mb-0">© <span id="anio">2026</span> Marea Alta Hoteles S.A.C.</p>
+    </section>
+
+    <section class="login-form-wrap">
+      <div class="login-card">
+        <!-- Paso 1: ingresar -->
+        <form id="form-login" novalidate>
+          <h1 class="h2-like">Bienvenido</h1>
+          <p class="text-muted mb-4">Ingresa con tu cuenta del hotel.</p>
+          <div id="login-alert" class="alert alert-danger py-2 small" role="alert" hidden></div>
+          <div class="mb-3">
+            <label class="form-label" for="email">Correo</label>
+            <input class="form-control" id="email" name="email" type="email" autocomplete="username" required autofocus>
+          </div>
+          <div class="mb-4">
+            <label class="form-label" for="clave">Contraseña</label>
+            <div class="position-relative">
+              <input class="form-control pe-5" id="clave" name="clave" type="password" autocomplete="current-password" required>
+              <button type="button" class="pw-toggle" data-toggle-pw="clave" aria-label="Mostrar contraseña"><i class="bi bi-eye"></i></button>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100" id="btn-login"><i class="bi bi-box-arrow-in-right"></i> Ingresar</button>
+          <div class="demo-users mt-4" id="demo-users">
+            <strong>Usuarios de prueba</strong> (cambian la contraseña al primer ingreso):<br>
+            <button type="button" data-demo="admin@mareaalta.pe|Admin2026!">Administrador</button> ·
+            <button type="button" data-demo="recepcion@mareaalta.pe|Recepcion2026!">Recepcionista</button>
+          </div>
+          <p class="small text-muted mt-4 mb-0"><a href="../index.html"><i class="bi bi-arrow-left"></i> Volver a la web del hotel</a></p>
+        </form>
+
+        <!-- Paso 2: cambio de contraseña obligatorio -->
+        <form id="form-cambio" novalidate hidden>
+          <h1 class="h2-like">Crea tu contraseña</h1>
+          <p class="text-muted mb-4">Por seguridad, cambia la contraseña temporal antes de continuar.</p>
+          <div id="cambio-alert" class="alert alert-danger py-2 small" role="alert" hidden></div>
+          <input type="hidden" name="claveActual" id="clave-actual">
+          <div class="mb-3">
+            <label class="form-label" for="clave-nueva">Nueva contraseña</label>
+            <input class="form-control" id="clave-nueva" name="claveNueva" type="password" autocomplete="new-password" required>
+            <div class="form-text">Mínimo 8 caracteres, con letras y números.</div>
+          </div>
+          <div class="mb-4">
+            <label class="form-label" for="clave-repite">Repite la contraseña</label>
+            <input class="form-control" id="clave-repite" type="password" autocomplete="new-password" required>
+          </div>
+          <button type="submit" class="btn btn-primary w-100"><i class="bi bi-shield-check"></i> Guardar y continuar</button>
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

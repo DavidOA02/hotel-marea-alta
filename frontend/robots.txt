@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /404.html
+Disallow: /panel/
+Disallow: /mi-reserva.html
+
+Sitemap: https://www.mareaalta.pe/sitemap.xml

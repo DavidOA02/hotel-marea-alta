@@ -1,0 +1,28 @@
+{
+  "name": "hotel-marea-alta",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Hotel Marea Alta · Paracas — Next.js 16 + NestJS 11 + PostgreSQL",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run build -w @marea/shared && node tools/preparar-env.js",
+    "verificar": "node tools/verificar.js",
+    "db": "node tools/configurar-bd.js",
+    "db:demo": "node tools/configurar-bd.js --demo",
+    "predev": "node tools/verificar.js",
+    "dev": "concurrently -n API,WEB -c cyan,yellow \"npm run dev -w @marea/api\" \"npm run dev -w @marea/web\"",
+    "build": "npm run build -w @marea/shared && npm run build -w @marea/api && npm run build -w @marea/web",
+    "start": "concurrently -n API,WEB -c cyan,yellow \"npm run start -w @marea/api\" \"npm run start -w @marea/web\"",
+    "test": "npm run test -w @marea/shared && npm run test -w @marea/api",
+    "test:e2e": "npm run test:e2e -w @marea/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}

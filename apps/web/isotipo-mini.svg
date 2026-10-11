@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Marea Alta">
+  <defs>
+    <linearGradient id="minic" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F7DCA8"/><stop offset=".5" stop-color="#F0A574"/><stop offset=".86" stop-color="#DD7360"/><stop offset="1" stop-color="#C95F57"/>
+    </linearGradient>
+    <radialGradient id="minis" cx=".5" cy=".62" r=".55">
+      <stop offset="0" stop-color="#FFFBEA"/><stop offset=".45" stop-color="#FFE29A"/><stop offset="1" stop-color="#F9B451"/>
+    </radialGradient>
+    <radialGradient id="minih" cx=".5" cy=".5" r=".5">
+      <stop offset=".55" stop-color="#FFE7AE" stop-opacity=".55"/><stop offset="1" stop-color="#FFE7AE" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="minim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F4D5B"/><stop offset="1" stop-color="#0C222A"/>
+    </linearGradient>
+    <clipPath id="minid"><circle cx="60" cy="60" r="55"/></clipPath>
+  </defs>
+  <g clip-path="url(#minid)">
+    <rect width="120" height="120" fill="url(#minic)"/>
+    <circle cx="60" cy="76" r="36" fill="url(#minih)"/>
+    <circle cx="60" cy="76" r="27" fill="url(#minis)"/>
+    <path d="M14 40 C32 29 48 45 66 36 S94 29 106 35" fill="none" stroke="#FFF9EE" stroke-width="6" stroke-linecap="round"/>
+    <rect y="76" width="120" height="44" fill="url(#minim)"/>
+    <line x1="40" y1="86" x2="80" y2="86" stroke="#F8C76E" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <circle cx="60" cy="60" r="56" fill="none" stroke="#B08D57" stroke-width="6"/>
+</svg>

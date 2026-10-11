@@ -1,0 +1,25 @@
+// ===== Hotel Marea Alta — medidas DAX (PostgreSQL, vistas vw_*) =====
+
+Noches disponibles = SUM ( vw_ocupacion_diaria[habitaciones_disponibles] )
+Noches ocupadas    = SUM ( vw_ocupacion_diaria[habitaciones_ocupadas] )
+Ingreso habitaciones = SUM ( vw_ocupacion_diaria[ingreso_habitaciones] )
+
+Ocupación % = DIVIDE ( [Noches ocupadas], [Noches disponibles] )
+ADR         = DIVIDE ( [Ingreso habitaciones], [Noches ocupadas] )
+RevPAR      = DIVIDE ( [Ingreso habitaciones], [Noches disponibles] )
+
+Reservas            = COUNTROWS ( vw_reservas_powerbi )
+Reservas efectivas  = CALCULATE ( [Reservas], vw_reservas_powerbi[es_efectiva] = 1 )
+Tasa de cancelación = DIVIDE ( [Reservas] - [Reservas efectivas], [Reservas] )
+Estadía promedio    = CALCULATE ( AVERAGE ( vw_reservas_powerbi[noches] ), vw_reservas_powerbi[es_efectiva] = 1 )
+Anticipación promedio (días) = CALCULATE ( AVERAGE ( vw_reservas_powerbi[dias_anticipacion] ), vw_reservas_powerbi[es_efectiva] = 1 )
+IGV generado        = CALCULATE ( SUM ( vw_reservas_powerbi[igv] ), vw_reservas_powerbi[es_efectiva] = 1 )
+Saldo pendiente     = CALCULATE ( SUM ( vw_reservas_powerbi[saldo] ), vw_reservas_powerbi[estado_reserva] IN { "Confirmada", "CheckIn" } )
+
+Cobrado = CALCULATE ( SUM ( vw_pagos_powerbi[monto_soles] ), vw_pagos_powerbi[estado_pago] = "Aprobado" )
+
+Reclamos fuera de plazo = SUM ( vw_reclamaciones_powerbi[fuera_de_plazo] )
+Días promedio de respuesta = AVERAGE ( vw_reclamaciones_powerbi[dias_en_responder] )
+
+Ocupación % mismo mes año anterior = CALCULATE ( [Ocupación %], SAMEPERIODLASTYEAR ( calendario[fecha] ) )
+Variación RevPAR vs. año anterior = DIVIDE ( [RevPAR] - CALCULATE ( [RevPAR], SAMEPERIODLASTYEAR ( calendario[fecha] ) ), CALCULATE ( [RevPAR], SAMEPERIODLASTYEAR ( calendario[fecha] ) ) )

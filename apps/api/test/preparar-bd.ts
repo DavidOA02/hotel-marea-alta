@@ -1,0 +1,18 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { Client } from 'pg';
+
+/** Crea desde cero la base de prueba hotel_marea_alta_test con el esquema real. */
+export default async function prepararBd() {
+  const cfg = { host: process.env.PGHOST || 'localhost', port: Number(process.env.PGPORT || 5432), user: process.env.PGUSER || 'postgres', password: process.env.PGPASSWORD || 'postgres' };
+  const admin = new Client({ ...cfg, database: 'postgres' });
+  await admin.connect();
+  await admin.query('DROP DATABASE IF EXISTS hotel_marea_alta_test WITH (FORCE)');
+  await admin.query(`CREATE DATABASE hotel_marea_alta_test ENCODING 'UTF8' TEMPLATE template0`);
+  await admin.end();
+  const db = new Client({ ...cfg, database: 'hotel_marea_alta_test' });
+  await db.connect();
+  await db.query(fs.readFileSync(path.resolve(__dirname, '../../../database/01_esquema.sql'), 'utf8'));
+  await db.end();
+  process.env.PGDATABASE = 'hotel_marea_alta_test';
+}
