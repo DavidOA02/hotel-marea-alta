@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { BedDouble, CalendarCheck, Download, LogIn, LogOut, UserX, Wallet, XCircle } from 'lucide-react';
+import { ArrowLeftRight, BedDouble, CalendarCheck, Download, LogIn, LogOut, Mail, RotateCcw, UserX, Wallet, XCircle } from 'lucide-react';
 import { cotizar, diasEntre, ETIQUETAS, hoyLima, METODOS_PAGO, pagoSchema, reservaPanelSchema, sumarDias, type PagoInput, type ReservaPanelInput } from '@marea/shared';
 import { ApiError } from '@/lib/api';
 import { TIPO_CAMBIO } from '@/lib/config';
@@ -14,6 +14,8 @@ import { avisar } from '@/stores/avisos';
 import { descargarConfirmacion } from '../pdf/confirmacion';
 import { BotonP, Cargando, confirmar, Estado, Modal, PanelLateral } from './base';
 import { AlertaForm, Campo } from './campo';
+import { FormularioCambioHabitacion } from './cambio-habitacion';
+import { SeccionComprobantes } from './comprobantes';
 
 /* ---------- Stores (Zustand) para abrir la ficha y los formularios desde cualquier vista ---------- */
 export const useFicha = create<{ codigo: string | null; abrir: (c: string) => void; cerrar: () => void }>(set => ({ codigo: null, abrir: codigo => set({ codigo }), cerrar: () => set({ codigo: null }) }));
@@ -38,7 +40,8 @@ export function FichaReserva() {
   const admin = useSesion(s => s.usuario?.rol === 'Administrador');
   const [d, setD] = useState<any>(null);
   const [n, setN] = useState(0);
-  useEffect(() => { if (!codigo) { setD(null); return; } apiPanel(`/gestion/reservas/${codigo}`).then(setD).catch(e => avisar(e.message, 'error')); }, [codigo, n]);
+  const [cambio, setCambio] = useState(false);
+  useEffect(() => { if (!codigo) { setD(null); setCambio(false); return; } apiPanel(`/gestion/reservas/${codigo}`).then(setD).catch(e => avisar(e.message, 'error')); }, [codigo, n]);
   const recargar = () => setN(x => x + 1);
   const hoy = hoyLima();
   const r = d?.reserva;
@@ -67,10 +70,11 @@ export function FichaReserva() {
           {r.saldo > 0.009 && !['Cancelada', 'NoShow'].includes(r.estado) && <BotonP variante="oro" onClick={() => abrirPago({ ...r, alPagar: recargar })}><Wallet className="size-4" />Registrar pago</BotonP>}
           {r.estado === 'Confirmada' && <BotonP variante="claro" className="text-bad" onClick={async () => { if (await confirmar('Cancelar reserva', `¿Cancelar la reserva ${r.codigo} de ${r.cliente}? La habitación quedará libre.`, 'Cancelar reserva', true)) ejecutar('cancelar'); }}><XCircle className="size-4" />Cancelar</BotonP>}
           {r.estado === 'Confirmada' && r.fechaEntrada <= hoy && <BotonP variante="claro" onClick={async () => { if (await confirmar('No show', `¿Marcar que ${r.cliente} no se presentó?`, 'Marcar no show', true)) ejecutar('noshow'); }}><UserX className="size-4" />No show</BotonP>}
+          {['Confirmada', 'CheckIn'].includes(r.estado) && r.fechaSalida > hoy && <BotonP variante="claro" onClick={() => setCambio(true)}><ArrowLeftRight className="size-4" />Cambiar habitación</BotonP>}
           {!['Cancelada', 'NoShow'].includes(r.estado) && <BotonP variante="claro" onClick={() => descargarConfirmacion({ ...r, titular: r.cliente }).catch(() => avisar('No se pudo generar el PDF.', 'error'))}><Download className="size-4" />PDF</BotonP>}
         </div>
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
-          {[['Habitación', `${r.habitacion} · ${r.tipoHabitacion}`], ['Huéspedes', r.huespedes], ['Llegada', `${fechaDia(r.fechaEntrada)}${r.horaLlegada ? ' · ' + r.horaLlegada : ''}`],
+          {[['Habitación', `${r.habitacion} · ${r.tipoHabitacion}${r.habitacionDesde ? ` (desde el ${fechaDia(r.habitacionDesde)})` : ''}`], ['Huéspedes', r.huespedes], ['Llegada', `${fechaDia(r.fechaEntrada)}${r.horaLlegada ? ' · ' + r.horaLlegada : ''}`],
             ['Salida', `${fechaDia(r.fechaSalida)} (${r.noches} noche${r.noches === 1 ? '' : 's'})`], ['Correo', r.email], ['Teléfono', r.telefono]].map(([k, v]) => (
             <div key={k as string}><dt className="text-xs text-muted">{k}</dt><dd className="mt-0.5 font-medium break-words">{v}</dd></div>))}
           {r.notas && <div className="col-span-2"><dt className="text-xs text-muted">Notas</dt><dd className="mt-0.5">{r.notas}</dd></div>}
@@ -84,19 +88,59 @@ export function FichaReserva() {
         <section aria-label="Pagos"><h3 className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-gold-dark">Pagos</h3>
           {d.pagos.length ? <ul className="divide-y divide-line text-sm">{d.pagos.map((p: any) => (
             <li key={p.id} className="flex items-center justify-between gap-3 py-2">
-              <span>{fechaHora(p.fechaPago)}<span className="block text-xs text-muted">{p.metodo}{p.referencia ? ' · ' + p.referencia : ''}{p.registradoPor ? ' · ' + p.registradoPor : ''}</span></span>
+              <span>{fechaHora(p.fechaPago)}<span className="block text-xs text-muted">{p.pasarela ? `En línea · ${ETIQUETAS[p.pasarela] ?? p.pasarela} · ${p.metodo}` : p.metodo}{p.referencia ? ' · ' + p.referencia : ''}{p.registradoPor && !p.pasarela ? ' · ' + p.registradoPor : ''}</span></span>
               <span className="text-right tabular-nums">{p.moneda === 'USD' ? `US$ ${p.monto.toFixed(2)} → ` : ''}{soles(p.montoSoles)}<span className="block"><Estado valor={p.estado} /></span></span>
             </li>))}</ul> : <p className="text-sm text-muted">Sin pagos registrados.</p>}
         </section>
-        <section aria-label="Historial"><h3 className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-gold-dark">Historial</h3>
-          <ol className="grid gap-2 border-l-2 border-line pl-4 text-sm">
-            <li>Reservada el {fechaHora(r.fechaReserva)} · {ETIQUETAS[r.canal]}{r.registradoPor ? ` por ${r.registradoPor}` : ''}</li>
-            {r.fechaCheckIn && <li>Check-in: {fechaHora(r.fechaCheckIn)}</li>}
-            {r.fechaCheckOut && <li>Check-out: {fechaHora(r.fechaCheckOut)}</li>}
-          </ol></section>
+        <SeccionComprobantes r={r} comprobantes={d.comprobantes} alCambiar={recargar} />
+        <SeccionCorreos r={r} correos={d.correos} alCambiar={recargar} />
+        <Historial r={r} historial={d.historial} />
         <Link href={`/panel/clientes/${r.clienteId}`} onClick={cerrar} className="text-sm text-ocean underline decoration-gold underline-offset-4">Ver ficha del cliente →</Link>
       </div>}
+      {r && <FormularioCambioHabitacion codigo={r.codigo} abierto={cambio} alCerrar={() => setCambio(false)} alCambiar={recargar} />}
     </PanelLateral>
+  );
+}
+
+const titulo = 'text-xs font-medium uppercase tracking-[0.14em] text-gold-dark';
+
+/** Correos automáticos de la reserva: estado de envío, reintento y reenvío de la confirmación. */
+function SeccionCorreos({ r, correos, alCambiar }: { r: any; correos: any[]; alCambiar: () => void }) {
+  const accion = async (ruta: string) => {
+    try { const x = await apiPanel(ruta, { method: 'POST', body: {} }); avisar(x.mensaje); alCambiar(); } catch (e: any) { avisar(e.message, 'error'); }
+  };
+  return (
+    <section aria-label="Correos">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className={titulo}>Correos al huésped</h3>
+        {['Confirmada', 'CheckIn'].includes(r.estado) && <BotonP variante="claro" className="!min-h-8" onClick={() => accion(`/gestion/reservas/${r.codigo}/reenviar-confirmacion`)}><Mail className="size-4" />Reenviar confirmación</BotonP>}
+      </div>
+      {correos.length ? <ul className="divide-y divide-line text-sm">{correos.map(c => (
+        <li key={c.id} className="flex items-center justify-between gap-3 py-2">
+          <span>{ETIQUETAS[c.tipo] ?? c.tipo}<span className="block text-xs text-muted">{c.para} · {fechaHora(c.fechaEnvio ?? c.fechaCreacion)}{c.error ? ` · ${c.error}` : ''}</span></span>
+          <span className="flex items-center gap-2">
+            {c.estado === 'Fallido' && <button onClick={() => accion(`/gestion/correos/${c.id}/reintentar`)} aria-label={`Reintentar envío a ${c.para}`} title="Reintentar" className="grid size-8 place-items-center rounded-lg hover:bg-sand"><RotateCcw className="size-4" /></button>}
+            <Estado valor={c.estado} />
+          </span>
+        </li>))}</ul> : <p className="text-sm text-muted">Sin correos registrados.</p>}
+    </section>
+  );
+}
+
+/** Historial a partir de la bitácora de auditoría (las reservas antiguas usan las fechas de la propia reserva). */
+function Historial({ r, historial }: { r: any; historial: any[] }) {
+  const reservada = <li key="r">Reservada el {fechaHora(r.fechaReserva)} · {ETIQUETAS[r.canal]}{r.registradoPor ? ` por ${r.registradoPor}` : ''}</li>;
+  return (
+    <section aria-label="Historial"><h3 className={`${titulo} mb-2`}>Historial</h3>
+      <ol className="grid gap-2 border-l-2 border-line pl-4 text-sm">
+        {!historial.length ? <>{reservada}
+          {r.fechaCheckIn && <li>Check-in: {fechaHora(r.fechaCheckIn)}</li>}
+          {r.fechaCheckOut && <li>Check-out: {fechaHora(r.fechaCheckOut)}</li>}
+          {r.fechaCancelacion && <li>Cancelada: {fechaHora(r.fechaCancelacion)}</li>}</>
+          : <>{!historial.some(h => h.accion === 'reserva.crear') && reservada}
+            {historial.map((h, i) => <li key={i}>{h.descripcion}<span className="block text-xs text-muted">{fechaHora(h.fecha)} · {h.usuario}</span></li>)}</>}
+      </ol>
+    </section>
   );
 }
 

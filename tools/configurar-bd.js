@@ -3,6 +3,7 @@
    HOTEL MAREA ALTA — Configuración de PostgreSQL
    Uso:  npm run db         crea la base hotel_marea_alta (BORRA la anterior)
          npm run db:demo    además carga ~15 meses de datos de demostración
+         npm run db:migrar  aplica 03_mejoras.sql a la base existente, SIN borrar datos
    Usa los datos de apps/api/.env (PGHOST, PGPORT, PGUSER, PGPASSWORD).
    Si la contraseña no funciona, la pide y la guarda en el .env.
    ========================================================== */
@@ -15,6 +16,7 @@ const { Client } = require(require.resolve('pg', { paths: [path.resolve(__dirnam
 const RAIZ = path.resolve(__dirname, '..');
 const ENV = path.join(RAIZ, 'apps/api/.env');
 const demo = process.argv.includes('--demo');
+const migrar = process.argv.includes('--migrar');
 const c = { ok: '\x1b[32m', err: '\x1b[31m', av: '\x1b[33m', b: '\x1b[1m', dim: '\x1b[2m', x: '\x1b[0m' };
 
 function leerEnv() {
@@ -57,13 +59,23 @@ async function conectar(cfg, db) { const cl = new Client({ ...cfg, database: db,
   console.log(`  ${c.ok}✓${c.x} Conectado a PostgreSQL ${(await admin.query('SHOW server_version')).rows[0].server_version} en ${cfg.host}:${cfg.port}`);
   if (cfg.password !== env.PGPASSWORD) { escribirEnv('PGPASSWORD', cfg.password); console.log(`  ${c.ok}✓${c.x} Contraseña guardada en apps/api/.env`); }
 
-  await admin.query(`DROP DATABASE IF EXISTS ${base} WITH (FORCE)`);
-  await admin.query(`CREATE DATABASE ${base} ENCODING 'UTF8' TEMPLATE template0`);
-  await admin.end();
-  console.log(`  ${c.ok}✓${c.x} Base de datos «${base}» creada`);
+  if (migrar) {
+    const existe = (await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [base])).rowCount;
+    await admin.end();
+    if (!existe) { console.log(`${c.err}✗ La base «${base}» no existe.${c.x} Créala con ${c.b}npm run db:demo${c.x}.`); process.exit(1); }
+    console.log(`  ${c.ok}✓${c.x} Base de datos «${base}» encontrada (no se borra nada)`);
+  } else {
+    await admin.query(`DROP DATABASE IF EXISTS ${base} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${base} ENCODING 'UTF8' TEMPLATE template0`);
+    await admin.end();
+    console.log(`  ${c.ok}✓${c.x} Base de datos «${base}» creada`);
+  }
 
   const db = await conectar(cfg, base);
-  for (const [archivo, texto] of [['01_esquema.sql', 'Tablas, 24 habitaciones, usuarios y vistas de Power BI'], ...(demo ? [['02_datos_demo.sql', 'Datos de demostración (15 meses)']] : [])]) {
+  const pasos = migrar ? [] : [['01_esquema.sql', 'Tablas, 24 habitaciones, usuarios y vistas de Power BI']];
+  pasos.push(['03_mejoras.sql', 'Bitácora, correos, cambios de habitación, pagos en línea y facturación']);
+  if (demo) pasos.push(['02_datos_demo.sql', 'Datos de demostración (15 meses)']);
+  for (const [archivo, texto] of pasos) {
     process.stdout.write(`  … ${texto}`);
     try { await db.query(fs.readFileSync(path.join(RAIZ, 'database', archivo), 'utf8')); process.stdout.write(`\r  ${c.ok}✓${c.x} ${texto}   \n`); }
     catch (e) { console.log(`\n${c.err}✗ Error en ${archivo}: ${e.message}${c.x}`); if (/btree_gist/.test(e.message)) console.log('  → El usuario necesita permiso para crear extensiones (usa «postgres»).'); process.exit(1); }
@@ -71,6 +83,7 @@ async function conectar(cfg, db) { const cl = new Client({ ...cfg, database: db,
   const r = (await db.query('SELECT (SELECT count(*) FROM habitaciones) h, (SELECT count(*) FROM reservas) r, (SELECT count(*) FROM usuarios) u')).rows[0];
   await db.end();
   console.log(`\n${c.ok}${c.b}Listo.${c.x} ${r.h} habitaciones · ${r.r} reservas · ${r.u} usuarios.`);
+  if (migrar) { console.log(`Base actualizada. Reinicia ${c.b}npm run dev${c.x} para usar las mejoras.\n`); return; }
   console.log(`Ahora ejecuta ${c.b}npm run dev${c.x} y abre http://localhost:3000  ·  Panel: http://localhost:3000/panel`);
   console.log(`${c.dim}Usuarios: admin@mareaalta.pe / Admin2026!  ·  recepcion@mareaalta.pe / Recepcion2026!  (cambian la contraseña al ingresar)${c.x}\n`);
 })().catch(e => { console.error(e); process.exit(1); });

@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { CheckCircle2, CreditCard, Download, Info, MessageCircle, ShieldCheck } from 'lucide-react';
@@ -19,7 +20,9 @@ export function FormularioReserva() {
   const { tipos, moneda, apiDisponible } = useTipos();
   const { borrador, setBorrador } = useReserva();
   const [libres, setLibres] = useState<Record<string, number> | null>(null);
-  const [confirmada, setConfirmada] = useState<DatosConfirmacion | null>(null);
+  const [confirmada, setConfirmada] = useState<(DatosConfirmacion & { email: string; puedePagarEnLinea: boolean }) | null>(null);
+  const [pagando, setPagando] = useState(false);
+  const router = useRouter();
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null);
   const hoy = hoyLima();
 
@@ -67,7 +70,7 @@ export function FormularioReserva() {
     if (quedan === 0) { setError('tipoHabitacion', { message: 'No quedan habitaciones de este tipo para tus fechas. Elige otro tipo o cambia las fechas.' }); return; }
     try {
       const r = await api('/reservas', { method: 'POST', body: d });
-      setConfirmada({ ...r, titular: `${d.nombres} ${d.apellidos}`, documento: `${d.tipoDocumento} ${d.numeroDocumento}` });
+      setConfirmada({ ...r, email: d.email, titular: `${d.nombres} ${d.apellidos}`, documento: `${d.tipoDocumento} ${d.numeroDocumento}` });
       avisar(`Reserva ${r.codigo} confirmada.`);
       document.getElementById('reservar')?.scrollIntoView({ behavior: 'smooth' });
     } catch (e) {
@@ -76,6 +79,12 @@ export function FormularioReserva() {
       else setErrorGeneral(err.message);
     }
   });
+
+  const pagarEnLinea = async () => {
+    setPagando(true);
+    try { const o = await api<{ id: string }>('/pagos-en-linea', { method: 'POST', body: { codigo: confirmada!.codigo, email: confirmada!.email } }); router.push(`/pago?orden=${o.id}`); }
+    catch (e) { avisar((e as ApiError).message, 'error'); setPagando(false); }
+  };
 
   const mensajeWa = `Hola, quisiera reservar en Marea Alta: ${tipo.nombre}, del ${fechaCorta(v.fechaEntrada)} al ${fechaCorta(v.fechaSalida)}, ${v.huespedes} huésped(es).`;
   const err = (k: keyof ReservaWebInput) => errors[k] ? <p id={`e-${k}`} className="campo-error" role="alert">{errors[k]?.message as string}</p> : null;
@@ -86,10 +95,11 @@ export function FormularioReserva() {
       <CheckCircle2 className="mx-auto size-12 text-ok" aria-hidden />
       <p className="eyebrow">Código de reserva {confirmada.codigo}</p>
       <h3 className="display text-4xl">¡Listo, {confirmada.titular.split(' ')[0]}! Tu reserva está confirmada</h3>
-      <p>{confirmada.tipoHabitacion} N.° {confirmada.habitacion}, del {fechaDia(confirmada.fechaEntrada)} al {fechaDia(confirmada.fechaSalida)} ({confirmada.noches} {confirmada.noches === 1 ? 'noche' : 'noches'}). Total: <strong>{soles(confirmada.total)}</strong>{confirmada.exoneradoIgv ? ', exonerado de IGV' : ', IGV incluido'}. Pagas al llegar.</p>
-      <p className="text-muted">Guarda tu código: con él puedes consultar o cancelar tu reserva (hasta 72 h antes) en «Mi reserva».</p>
+      <p>{confirmada.tipoHabitacion} N.° {confirmada.habitacion}, del {fechaDia(confirmada.fechaEntrada)} al {fechaDia(confirmada.fechaSalida)} ({confirmada.noches} {confirmada.noches === 1 ? 'noche' : 'noches'}). Total: <strong>{soles(confirmada.total)}</strong>{confirmada.exoneradoIgv ? ', exonerado de IGV' : ', IGV incluido'}. {confirmada.puedePagarEnLinea ? 'Puedes pagar al llegar o ahora en línea.' : 'Pagas al llegar.'}</p>
+      <p className="text-muted">Te enviamos la confirmación a {confirmada.email}. Guarda tu código: con él puedes consultar o cancelar tu reserva (hasta 72 h antes) en «Mi reserva».</p>
       <div className="mt-4 flex flex-wrap justify-center gap-3">
-        <button className="btn-oro" onClick={() => descargarConfirmacion(confirmada).catch(() => avisar('No se pudo generar el PDF.', 'error'))}><Download className="size-4" aria-hidden />Descargar confirmación (PDF)</button>
+        {confirmada.puedePagarEnLinea && <button className="btn-oro" disabled={pagando} onClick={pagarEnLinea}><CreditCard className="size-4" aria-hidden />{pagando ? 'Preparando…' : 'Pagar ahora en línea'}</button>}
+        <button className={confirmada.puedePagarEnLinea ? 'btn-borde' : 'btn-oro'} onClick={() => descargarConfirmacion(confirmada).catch(() => avisar('No se pudo generar el PDF.', 'error'))}><Download className="size-4" aria-hidden />Descargar confirmación (PDF)</button>
         <Link className="btn-borde" href={`/mi-reserva?codigo=${confirmada.codigo}`}>Ver mi reserva</Link>
         <button className="btn-borde" onClick={() => { setConfirmada(null); reset(); }}>Hacer otra reserva</button>
       </div>

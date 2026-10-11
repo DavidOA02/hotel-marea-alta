@@ -24,7 +24,8 @@ export function useDatos<T>(ruta: string | null) {
 /* ---------------- Presentación ---------------- */
 const TONOS: Record<string, string> = {
   Confirmada: 'info', CheckIn: 'ok', CheckOut: 'muted', Cancelada: 'bad', NoShow: 'bad', Aprobado: 'ok', Anulado: 'bad', Pendiente: 'warn', Respondido: 'ok',
-  Operativa: 'ok', Mantenimiento: 'warn', FueraDeServicio: 'bad', Limpia: 'ok', Sucia: 'warn', Administrador: 'gold', Recepcionista: 'info'
+  Operativa: 'ok', Mantenimiento: 'warn', FueraDeServicio: 'bad', Limpia: 'ok', Sucia: 'warn', Administrador: 'gold', Recepcionista: 'info',
+  Aceptado: 'ok', Observado: 'warn', Rechazado: 'bad', Enviado: 'ok', Simulado: 'info', Fallido: 'bad'
 };
 const CLASES: Record<string, string> = { ok: 'bg-ok-bg text-ok', info: 'bg-info-bg text-info', warn: 'bg-warn-bg text-warn', bad: 'bg-bad-bg text-bad', muted: 'bg-[#EEEDE8] text-muted', gold: 'bg-gold-soft text-gold-dark' };
 export function Estado({ valor }: { valor: string }) {

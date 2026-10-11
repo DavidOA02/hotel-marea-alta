@@ -14,10 +14,20 @@ export const METODOS_PAGO = ['Tarjeta', 'Yape', 'Plin', 'Transferencia', 'Efecti
 export const ESTADOS_HABITACION = ['Operativa', 'Mantenimiento', 'FueraDeServicio'] as const;
 export const TIPOS_DOCUMENTO = ['DNI', 'CE', 'PAS'] as const;
 
+export const TARIFAS_CAMBIO = ['Mantener', 'Recalcular'] as const;
+export const ESTADOS_COMPROBANTE = ['Pendiente', 'Aceptado', 'Observado', 'Rechazado', 'Anulado'] as const;
+/** Catálogo 01 de SUNAT. */
+export const TIPOS_COMPROBANTE: Record<string, string> = { '01': 'Factura', '03': 'Boleta' };
+export const ENTIDADES_BITACORA = ['reserva', 'pago', 'cliente', 'habitacion', 'tipo', 'usuario', 'reclamo', 'comprobante', 'correo', 'sesion'] as const;
+
 export const ETIQUETAS: Record<string, string> = {
   Confirmada: 'Confirmada', CheckIn: 'En el hotel', CheckOut: 'Finalizada', Cancelada: 'Cancelada', NoShow: 'No show',
   Web: 'Web', WhatsApp: 'WhatsApp', Telefono: 'Teléfono', Recepcion: 'Recepción',
   Operativa: 'Operativa', Mantenimiento: 'Mantenimiento', FueraDeServicio: 'Fuera de servicio',
   Limpia: 'Limpia', Sucia: 'Por limpiar', Aprobado: 'Aprobado', Anulado: 'Anulado', Pendiente: 'Pendiente', Respondido: 'Respondido',
-  DNI: 'DNI', CE: 'Carné de extranjería', PAS: 'Pasaporte', PE: 'Residente', EXT: 'Extranjero'
+  DNI: 'DNI', CE: 'Carné de extranjería', PAS: 'Pasaporte', PE: 'Residente', EXT: 'Extranjero',
+  Aceptado: 'Aceptado', Observado: 'Aceptado con observaciones', Rechazado: 'Rechazado', Enviado: 'Enviado', Simulado: 'Simulado', Fallido: 'Fallido',
+  Mantener: 'Mantener tarifa', Recalcular: 'Recalcular tarifa', MercadoPago: 'Mercado Pago', Simulada: 'Simulada',
+  confirmacion: 'Confirmación de reserva', cancelacion: 'Cancelación', pago: 'Pago recibido', reclamo_constancia: 'Constancia de reclamo',
+  reclamo_respuesta: 'Respuesta al reclamo', comprobante: 'Comprobante electrónico'
 };

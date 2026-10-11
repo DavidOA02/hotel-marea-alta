@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useForm, type FieldValues, type UseFormReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { ZodType } from 'zod';
-import { anularPagoSchema, clienteSchema, ESTADOS_HABITACION, ETIQUETAS, habitacionSchema, respuestaReclamoSchema, tipoSchema, usuarioSchema } from '@marea/shared';
+import { anularComprobanteSchema, anularPagoSchema, clienteSchema, ESTADOS_HABITACION, ETIQUETAS, habitacionSchema, respuestaReclamoSchema, TIPOS_COMPROBANTE, tipoSchema, usuarioSchema } from '@marea/shared';
 import { ApiError } from '@/lib/api';
 import { soles0 } from '@/lib/formato';
 import { apiPanel, refrescar } from '@/stores/sesion';
@@ -118,7 +118,17 @@ export function FormRespuesta({ r, abierto, alCerrar }: { r: any | null; abierto
   return (
     <FormularioModal abierto={abierto} alCerrar={alCerrar} titulo={`Responder ${r?.tipo?.toLowerCase() ?? ''} N.° ${r?.numero ?? ''}`} esquema={respuestaReclamoSchema} boton="Registrar respuesta" ancho="max-w-2xl"
       valores={{ respuesta: '' }} enviar={d => apiPanel(`/gestion/reclamaciones/${r.numero}/respuesta`, { method: 'PATCH', body: d })}>
-      {f => <Campo etiqueta="Respuesta del proveedor" error={err(f, 'respuesta')} ayuda="Se registra aquí; envíala también al correo del consumidor."><textarea rows={6} className="!h-auto py-2" {...f.register('respuesta')} /></Campo>}
+      {f => <Campo etiqueta="Respuesta del proveedor" error={err(f, 'respuesta')} ayuda="Se registra y se envía automáticamente al correo del consumidor."><textarea rows={6} className="!h-auto py-2" {...f.register('respuesta')} /></Campo>}
+    </FormularioModal>
+  );
+}
+
+export function FormAnularComprobante({ k, abierto, alCerrar }: { k: any | null; abierto: boolean; alCerrar: () => void }) {
+  return (
+    <FormularioModal abierto={abierto} alCerrar={alCerrar} titulo={`Anular ${TIPOS_COMPROBANTE[k?.tipo] ?? ''} ${k?.serie ?? ''}-${k?.numero ?? ''}`} esquema={anularComprobanteSchema} boton="Comunicar baja" peligro
+      valores={{ motivo: '' }} enviar={d => apiPanel(`/gestion/comprobantes/${k.id}/anular`, { method: 'POST', body: d })}>
+      {f => <><p className="mb-4 text-sm text-muted">Se envía la comunicación de baja a SUNAT a través del OSE (hasta 7 días después de emitido). No devuelve dinero: si corresponde, registra la devolución aparte.</p>
+        <Campo etiqueta="Motivo" error={err(f, 'motivo')}><input maxLength={200} placeholder="p. ej. error en el RUC del cliente" {...f.register('motivo')} /></Campo></>}
     </FormularioModal>
   );
 }

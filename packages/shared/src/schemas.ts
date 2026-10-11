@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CANALES, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, ROLES, TIPOS_DOCUMENTO } from './constantes';
+import { CANALES, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, ROLES, TARIFAS_CAMBIO, TIPOS_DOCUMENTO } from './constantes';
 import { validarDocumento, validarTelefono } from './documentos';
 import { diasEntre, hoyLima, sumarDias } from './fechas';
 
@@ -103,7 +103,40 @@ export const pagoSchema = z.object({
   if (d.moneda === 'USD' && !d.tipoCambio) ctx.addIssue({ code: 'custom', message: 'Indica el tipo de cambio para pagos en dólares.', path: ['tipoCambio'] });
 });
 export type PagoInput = z.input<typeof pagoSchema>;
-export const anularPagoSchema = z.object({ motivo: z.string().trim().min(5, 'El motivo debe tener al menos 5 caracteres.').max(200) });
+const motivo = z.string({ error: 'Indica el motivo.' }).trim().min(5, 'El motivo debe tener al menos 5 caracteres.').max(200, 'Máximo 200 caracteres.');
+export const anularPagoSchema = z.object({ motivo });
+
+/** Pago en línea desde la web: se identifica la reserva igual que en «Mi reserva». */
+export const pagoEnLineaSchema = z.object({
+  codigo: z.string().trim().toUpperCase().regex(/^MA\d{7,}$/, 'El código de reserva no es válido.'),
+  email
+});
+
+/* ---------------- Cambio de habitación ---------------- */
+export const cambioHabitacionSchema = z.object({
+  habitacionId: z.coerce.number({ error: 'Elige la nueva habitación.' }).int().positive('Elige la nueva habitación.'),
+  tarifa: z.enum(TARIFAS_CAMBIO, { error: 'Indica qué hacer con la tarifa.' }),
+  motivo
+});
+export type CambioHabitacionInput = z.input<typeof cambioHabitacionSchema>;
+
+/* ---------------- Comprobantes electrónicos (SUNAT) ---------------- */
+export const comprobanteSchema = z.object({
+  tipo: z.enum(['Boleta', 'Factura'], { error: 'Elige boleta o factura.' }),
+  /** Factura de exportación de servicios de hospedaje a extranjeros no domiciliados (se identifica con pasaporte). */
+  exportacion: z.boolean().default(false),
+  ruc: z.string().trim().optional().nullable().transform(v => (v ? v : null)),
+  razonSocial: opcional(200),
+  direccion: opcional(200)
+}).superRefine((d, ctx) => {
+  if (d.tipo !== 'Factura' || d.exportacion) return;
+  const ruc = validarDocumento('RUC', d.ruc ?? '');
+  if (ruc) ctx.addIssue({ code: 'custom', message: ruc, path: ['ruc'] });
+  if (!d.razonSocial) ctx.addIssue({ code: 'custom', message: 'Escribe la razón social.', path: ['razonSocial'] });
+  if (!d.direccion) ctx.addIssue({ code: 'custom', message: 'Escribe la dirección fiscal.', path: ['direccion'] });
+});
+export type ComprobanteInput = z.input<typeof comprobanteSchema>;
+export const anularComprobanteSchema = z.object({ motivo });
 
 /* ---------------- Autenticación y usuarios ---------------- */
 const claveFuerte = z.string().min(8, 'La contraseña debe tener al menos 8 caracteres.')

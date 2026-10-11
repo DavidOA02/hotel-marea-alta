@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { Pool, PoolClient, types } from 'pg';
 import { abrirTunelSsh } from './tunel-ssh';
 
@@ -18,7 +18,7 @@ export function camelizar<T = any>(fila: Record<string, any>): T {
 export type Ejecutor = Pick<PoolClient, 'query'>;
 
 @Injectable()
-export class Db implements OnModuleInit, OnModuleDestroy {
+export class Db implements OnModuleInit, OnApplicationShutdown {
   private readonly log = new Logger('PostgreSQL');
   private pool!: Pool;
   private cerrarTunel?: () => void;
@@ -46,7 +46,8 @@ export class Db implements OnModuleInit, OnModuleDestroy {
     this.pool.on('error', e => this.log.error(e.message));
   }
 
-  async onModuleDestroy() {
+  /** Se cierra al final (después de onModuleDestroy), cuando los procesos en segundo plano ya terminaron su lote. */
+  async onApplicationShutdown() {
     await this.pool?.end();
     this.cerrarTunel?.();
   }

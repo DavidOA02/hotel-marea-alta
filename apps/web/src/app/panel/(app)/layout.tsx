@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { BarChart3, Bell, BellRing, CalendarRange, ChevronDown, DoorOpen, ExternalLink, HelpCircle, Hourglass, LayoutDashboard, LogOut, Menu, NotebookText, Search, Tags, UserCog, Users, Wallet, X } from 'lucide-react';
+import { BarChart3, Bell, BellRing, CalendarRange, ChevronDown, DoorOpen, ExternalLink, HelpCircle, Hourglass, LayoutDashboard, LogOut, Menu, NotebookText, ReceiptText, ScrollText, Search, Tags, UserCog, Users, Wallet, X } from 'lucide-react';
 import { hoyLima } from '@marea/shared';
 import { iniciales } from '@/lib/formato';
 import { apiPanel, useRefresco, useSesion } from '@/stores/sesion';
@@ -13,10 +13,10 @@ import { Emblema } from '@/components/logo';
 const MINUTOS_INACTIVIDAD = Number(process.env.NEXT_PUBLIC_PANEL_INACTIVIDAD_MIN || 30);
 const MENU = [
   { grupo: 'General', items: [['/panel/dashboard', 'Dashboard', LayoutDashboard], ['/panel/recepcion', 'Recepción', BellRing]] },
-  { grupo: 'Operación', items: [['/panel/reservas', 'Reservas', CalendarRange], ['/panel/habitaciones', 'Habitaciones', DoorOpen], ['/panel/clientes', 'Clientes', Users], ['/panel/caja', 'Caja y pagos', Wallet], ['/panel/reclamaciones', 'Reclamaciones', NotebookText]] },
-  { grupo: 'Administración', admin: true, items: [['/panel/reportes', 'Reportes', BarChart3], ['/panel/tarifas', 'Tipos y tarifas', Tags], ['/panel/usuarios', 'Usuarios', UserCog]] }
+  { grupo: 'Operación', items: [['/panel/reservas', 'Reservas', CalendarRange], ['/panel/habitaciones', 'Habitaciones', DoorOpen], ['/panel/clientes', 'Clientes', Users], ['/panel/caja', 'Caja y pagos', Wallet], ['/panel/comprobantes', 'Comprobantes', ReceiptText], ['/panel/reclamaciones', 'Reclamaciones', NotebookText]] },
+  { grupo: 'Administración', admin: true, items: [['/panel/reportes', 'Reportes', BarChart3], ['/panel/tarifas', 'Tipos y tarifas', Tags], ['/panel/usuarios', 'Usuarios', UserCog], ['/panel/bitacora', 'Bitácora', ScrollText]] }
 ] as const;
-const SOLO_ADMIN = ['/panel/reportes', '/panel/tarifas', '/panel/usuarios'];
+const SOLO_ADMIN = ['/panel/reportes', '/panel/tarifas', '/panel/usuarios', '/panel/bitacora'];
 
 export default function LayoutPanel({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -198,10 +198,13 @@ function Guia({ abierto, alCerrar, admin }: { abierto: boolean; alCerrar: () => 
     ['Cobrar', 'En la ficha de la reserva pulsa Registrar pago. Para Yape, Plin o transferencia anota el N.° de operación en «Referencia».'],
     ['Check-out', 'Solo con saldo S/ 0.00. La habitación pasa a «Por limpiar»; márcala como limpia cuando esté lista.'],
     ['Teléfono y walk-in', 'Usa «Nueva reserva» o «Walk-in» (con check-in inmediato). El sistema asigna la habitación y calcula el IGV.'],
+    ['Cambio de habitación', 'En la ficha pulsa «Cambiar habitación»: elige una libre, decide si se mantiene o se recalcula la tarifa y anota el motivo. Si el huésped ya está en el hotel, la habitación anterior pasa a «Por limpiar».'],
+    ['Comprobante electrónico', 'Con la reserva pagada, en la ficha pulsa «Emitir»: boleta con el documento del huésped o factura con RUC. A los extranjeros exonerados se les emite factura de exportación.'],
+    ['Correos', 'La confirmación, la cancelación, los pagos en línea y los comprobantes se envían solos. En la ficha ves si llegaron y puedes reenviar la confirmación.'],
     ['Confirmación en PDF', 'En la ficha de la reserva pulsa PDF para entregar o enviar la confirmación al huésped.'],
     ['Buscar rápido', 'Pulsa la tecla / y escribe un código, nombre, documento o correo.'],
     ['Seguridad', `La sesión se cierra tras ${MINUTOS_INACTIVIDAD} minutos sin actividad. Cada pago y reserva queda registrado con tu nombre.`],
-    ...(admin ? [['Reportes y tarifas', 'Ocupación, ADR y RevPAR por periodo. Los cambios de tarifa solo afectan a reservas nuevas.'], ['Usuarios y reclamos', 'Crea cuentas con contraseña temporal. Responde los reclamos dentro de 15 días hábiles.']] : [])
+    ...(admin ? [['Reportes y tarifas', 'Ocupación, ADR y RevPAR por periodo. Los cambios de tarifa solo afectan a reservas nuevas.'], ['Usuarios y reclamos', 'Crea cuentas con contraseña temporal. Responde los reclamos dentro de 15 días hábiles: la respuesta se envía sola al correo del consumidor.'], ['Bitácora', 'Revisa quién hizo cada cambio (tarifas, pagos anulados, usuarios, check-out con saldo…). Los registros no se pueden borrar.']] : [])
   ];
   return (
     <Modal abierto={abierto} alCerrar={alCerrar} titulo={`Guía rápida · ${admin ? 'Administrador' : 'Recepción'}`} ancho="max-w-2xl" pie={<BotonP onClick={alCerrar}>Entendido</BotonP>}>

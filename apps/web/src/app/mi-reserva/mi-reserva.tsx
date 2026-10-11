@@ -1,10 +1,10 @@
 'use client';
 import { useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Download, MessageCircle, Search, XCircle } from 'lucide-react';
+import { CreditCard, Download, MessageCircle, Search, XCircle } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { enlaceWhatsapp } from '@/lib/config';
 import { fechaLarga, soles } from '@/lib/formato';
@@ -21,6 +21,8 @@ const ESTADOS: Record<string, [string, 'ok' | 'info' | 'bad' | 'muted']> = { Con
 
 export function MiReserva() {
   const params = useSearchParams();
+  const router = useRouter();
+  const [pagando, setPagando] = useState(false);
   const [r, setR] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [confirmando, setConfirmando] = useState(false);
@@ -38,6 +40,12 @@ export function MiReserva() {
       avisar(x.mensaje); setConfirmando(false);
       setR(await api(`/reservas/${r.codigo}?email=${encodeURIComponent(email)}`));
     } catch (e) { avisar((e as ApiError).message, 'error'); setConfirmando(false); }
+  };
+
+  const pagar = async () => {
+    setPagando(true);
+    try { const o = await api<{ id: string }>('/pagos-en-linea', { method: 'POST', body: { codigo: r.codigo, email } }); router.push(`/pago?orden=${o.id}`); }
+    catch (e) { avisar((e as ApiError).message, 'error'); setPagando(false); }
   };
 
   if (!r) return (
@@ -65,12 +73,13 @@ export function MiReserva() {
       <dl className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {[['Titular', r.titular], ['Habitación N.°', r.habitacion], ['Huéspedes', r.huespedes], ['Llegada', `${fechaLarga(r.fechaEntrada)} · desde 15:00`],
           ['Salida', `${fechaLarga(r.fechaSalida)} · hasta 12:00`], ['Noches', r.noches], ['Valor de venta', soles(r.subtotal)],
-          ['IGV', r.exoneradoIgv ? 'Exonerado' : soles(r.igv)], ['Total', soles(r.total)], ['Pagado', soles(r.pagado)]].map(([k, v]) => (
+          ['IGV', r.exoneradoIgv ? 'Exonerado' : soles(r.igv)], ['Total', soles(r.total)], ['Pagado', soles(r.pagado)], ['Saldo', soles(r.saldo)]].map(([k, v]) => (
           <div key={k}><dt className="text-[0.68rem] font-medium uppercase tracking-[0.2em] text-gold-dark">{k}</dt><dd className="mt-1">{v}</dd></div>))}
       </dl>
       <p className="text-sm text-muted">{r.puedeCancelar ? 'Puedes cancelar sin costo hasta 72 horas antes de tu llegada.' : r.motivoNoCancelable}</p>
       <div className="flex flex-wrap gap-3">
-        <button className="btn-oro" onClick={() => descargarConfirmacion({ ...r, titular: r.titular }).catch(() => avisar('No se pudo generar el PDF.', 'error'))}><Download className="size-4" aria-hidden />Descargar PDF</button>
+        {r.puedePagarEnLinea && <button className="btn-oro" disabled={pagando} onClick={pagar}><CreditCard className="size-4" aria-hidden />{pagando ? 'Preparando…' : `Pagar ${soles(r.saldo)} en línea`}</button>}
+        <button className={r.puedePagarEnLinea ? 'btn-borde' : 'btn-oro'} onClick={() => descargarConfirmacion({ ...r, titular: r.titular }).catch(() => avisar('No se pudo generar el PDF.', 'error'))}><Download className="size-4" aria-hidden />Descargar PDF</button>
         {r.puedeCancelar && !confirmando && <button className="btn-borde" onClick={() => setConfirmando(true)}><XCircle className="size-4" aria-hidden />Cancelar reserva</button>}
         <a className="btn-wa" href={enlaceWhatsapp(`Hola, tengo una consulta sobre mi reserva ${r.codigo}.`)} target="_blank" rel="noopener"><MessageCircle className="size-4" aria-hidden />Escribir al hotel</a>
         <button className="btn-borde" onClick={() => setR(null)}>Buscar otra</button>
