@@ -42,7 +42,7 @@ export function Tabla<T extends Record<string, any>>({ datos, columnas: cols, bu
   return (
     <div>
       {(buscador || csv || barra) && (
-        <div className="flex flex-wrap items-center gap-3 border-b border-line bg-[#FCFBF9] px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center gap-3 border-b border-line bg-[#FCFBF9] px-4 py-3 sm:px-5 print:hidden">
           {buscador && (
             <div className="relative min-w-52 flex-1">
               <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden />

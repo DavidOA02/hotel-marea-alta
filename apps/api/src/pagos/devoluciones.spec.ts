@@ -7,7 +7,7 @@ describe('Sondeo de devoluciones Niubiz', () => {
       const cursor = /id\s*>\s*\$1/.test(sql) ? Number(params[0]) : 0;
       return pendientes.filter(d => d.id > cursor).slice(0, 50);
     }) };
-    const servicio = new Devoluciones(db as never, undefined as never, undefined as never, undefined as never, undefined as never);
+    const servicio = new Devoluciones(db as never, undefined as never, undefined as never, undefined as never, undefined as never, undefined as never);
     const ejecutar = jest.spyOn(servicio as any, 'ejecutar').mockResolvedValue(undefined);
     const proceso = servicio as unknown as { consultarPendientes(): void; enCurso: Promise<void> | null };
 

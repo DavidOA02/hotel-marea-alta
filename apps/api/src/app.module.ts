@@ -29,16 +29,18 @@ import { PagosService } from './pagos/pagos.service';
 import { PublicoController } from './publico/publico.controller';
 import { ReservasService } from './reservas/reservas.service';
 import { ConsumosController } from './gestion/consumos.controller';
+import { TurnosController } from './gestion/turnos.controller';
+import { TurnosCaja } from './pagos/turnos.service';
 
 const CONTROLADORES = [PublicoController, AuthController, ReservasGestionController, HabitacionesController, ClientesController,
   PagosController, MetricasController, AdminController, BitacoraController, PagosEnLineaController, FacturacionController,
-  CorreosController, EncuestasController, ConsumosController];
+  CorreosController, EncuestasController, ConsumosController, TurnosController];
 
 @Module({
   imports: [JwtModule.register({})],
   controllers: CONTROLADORES,
   providers: [Db, AuthService, ReservasService, SesionGuard, Bitacora, Correos, PagosService, PagosEnLinea, Facturacion,
-    Devoluciones, CorreosProgramados,
+    Devoluciones, CorreosProgramados, TurnosCaja,
     { provide: APP_GUARD, useClass: LimiteGuard },
     { provide: APP_FILTER, useClass: FiltroErrores }]
 })

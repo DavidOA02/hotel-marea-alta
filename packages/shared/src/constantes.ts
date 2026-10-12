@@ -26,7 +26,10 @@ export const MOTIVOS_NOTA_CREDITO: Record<string, string> = {
 /** Motivos que anulan el comprobante completo; el resto es parcial. */
 export const MOTIVOS_NC_TOTALES = ['01', '02', '06'];
 export const DIAS_RECORDATORIO = 2;
-export const ENTIDADES_BITACORA = ['reserva', 'pago', 'cliente', 'habitacion', 'tipo', 'usuario', 'reclamo', 'comprobante', 'correo', 'sesion'] as const;
+export const ENTIDADES_BITACORA = ['reserva', 'pago', 'turno', 'cliente', 'habitacion', 'tipo', 'usuario', 'reclamo', 'comprobante', 'correo', 'sesion'] as const;
+/** Caja por turnos: movimientos de efectivo fuera de los cobros y aviso de turnos que quedaron abiertos. */
+export const MOVIMIENTOS_CAJA = ['Ingreso', 'Retiro'] as const;
+export const HORAS_TURNO_LARGO = 12;
 
 export const ETIQUETAS: Record<string, string> = {
   Confirmada: 'Confirmada', CheckIn: 'En el hotel', CheckOut: 'Finalizada', Cancelada: 'Cancelada', NoShow: 'No show',
@@ -38,5 +41,6 @@ export const ETIQUETAS: Record<string, string> = {
   Mantener: 'Mantener tarifa', Recalcular: 'Recalcular tarifa', MercadoPago: 'Mercado Pago', Simulada: 'Simulada',
   confirmacion: 'Confirmación de reserva', cancelacion: 'Cancelación', pago: 'Pago recibido', reclamo_constancia: 'Constancia de reclamo',
   reclamo_respuesta: 'Respuesta al reclamo', comprobante: 'Comprobante electrónico', recordatorio: 'Recordatorio de llegada',
-  encuesta: 'Encuesta de satisfacción', devolucion: 'Devolución', Completada: 'Completada', Fallida: 'Fallida', Pasarela: 'Por la pasarela', Manual: 'Manual'
+  encuesta: 'Encuesta de satisfacción', devolucion: 'Devolución', Completada: 'Completada', Fallida: 'Fallida', Pasarela: 'Por la pasarela', Manual: 'Manual',
+  Abierto: 'Abierto', Cerrado: 'Cerrado', Revisado: 'Revisado', Ingreso: 'Ingreso de efectivo', Retiro: 'Retiro de efectivo'
 };

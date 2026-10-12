@@ -12,6 +12,8 @@ export interface ReservaBloqueada {
 export interface NuevoPago {
   monto: number; moneda: 'PEN' | 'USD'; tipoCambio: number | null; montoSoles: number; metodo: string;
   referencia: string | null; registradoPor: string | null; pasarela?: string | null;
+  /** Turno de caja de quien cobra en el panel (los pagos de la pasarela no tienen turno). */
+  turnoId?: number | null;
 }
 
 /** Cobros: la reserva se bloquea mientras se registra un pago, así dos cobros simultáneos no superan el saldo. */
@@ -57,14 +59,14 @@ export class PagosService {
 
   /** Inserta el pago y lo deja en la bitácora. Se llama dentro de la transacción que bloqueó la reserva. */
   async registrar(c: PoolClient, r: ReservaBloqueada, p: NuevoPago) {
-    const pago = (await this.db.uno<{ id: number }>(`INSERT INTO pagos (reserva_id, monto, moneda, tipo_cambio, monto_soles, metodo, referencia, registrado_por, pasarela)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [r.id, p.monto, p.moneda, p.moneda === 'USD' ? p.tipoCambio : null, p.montoSoles, p.metodo, p.referencia, p.registradoPor, p.pasarela ?? null], c))!;
+    const pago = (await this.db.uno<{ id: number }>(`INSERT INTO pagos (reserva_id, monto, moneda, tipo_cambio, monto_soles, metodo, referencia, registrado_por, pasarela, turno_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      [r.id, p.monto, p.moneda, p.moneda === 'USD' ? p.tipoCambio : null, p.montoSoles, p.metodo, p.referencia, p.registradoPor, p.pasarela ?? null, p.turnoId ?? null], c))!;
     const pagado = redondear(r.pagado + p.montoSoles);
     const origen = p.pasarela ? `en línea (${p.pasarela})` : p.metodo;
     await this.bitacora.registrar({ accion: p.pasarela ? 'pago.en_linea' : 'pago.registrar', entidad: 'reserva', entidadId: r.codigo,
       descripcion: `Pago de S/ ${p.montoSoles.toFixed(2)} ${origen}${p.moneda === 'USD' ? ` (US$ ${p.monto.toFixed(2)} × ${p.tipoCambio})` : ''}${p.referencia ? ` · ref. ${p.referencia}` : ''}`,
-      datos: { pagoId: pago.id, monto: p.monto, moneda: p.moneda, tipoCambio: p.tipoCambio, montoSoles: p.montoSoles, metodo: p.metodo, referencia: p.referencia, pasarela: p.pasarela ?? null },
+      datos: { pagoId: pago.id, monto: p.monto, moneda: p.moneda, tipoCambio: p.tipoCambio, montoSoles: p.montoSoles, metodo: p.metodo, referencia: p.referencia, pasarela: p.pasarela ?? null, turnoId: p.turnoId ?? null },
       ...(p.pasarela ? { autor: { nombre: `Pasarela ${p.pasarela}` } } : {}) }, c);
     return { pagoId: pago.id, pagado, saldo: redondear(r.total - pagado) };
   }

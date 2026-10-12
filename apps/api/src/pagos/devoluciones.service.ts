@@ -10,6 +10,7 @@ import { Facturacion } from '../facturacion/facturacion.service';
 import { Culqi, ErrorDevolucionNoEnviada, ErrorPasarela, MercadoPago, Niubiz, ResultadoDevolucion, Simulada } from '../pagos-en-linea/pasarelas';
 import { SQL_RESERVA } from '../reservas/reservas.service';
 import { PagosService } from './pagos.service';
+import { TurnosCaja } from './turnos.service';
 
 /** Pasarelas que devuelven por API; con efectivo o transferencia el hotel devuelve y lo registra aquí. */
 const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Niubiz', 'Simulada'];
@@ -27,7 +28,7 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
   private cerrado = false;
   private cursorPendientes = 0;
   constructor(private readonly db: Db, private readonly pagos: PagosService, private readonly facturacion: Facturacion,
-              private readonly bitacora: Bitacora, private readonly correos: Correos) {}
+              private readonly bitacora: Bitacora, private readonly correos: Correos, private readonly turnos: TurnosCaja) {}
 
   onModuleInit() {
     if (process.env.PROCESOS_EN_SEGUNDO_PLANO !== 'false') {
@@ -52,7 +53,8 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
     })().catch(e=>this.log.error(e.message)).finally(()=>{this.enCurso=null;});
   }
 
-  async devolver(pagoId: number, d: { monto: number; motivo: string; reducirTotal: boolean }, registradoPor: string) {
+  async devolver(pagoId: number, d: { monto: number; motivo: string; reducirTotal: boolean }, usuario: { id: number; nombre: string }) {
+    const registradoPor = usuario.nombre;
     const monto = redondear(d.monto);
     const { dev, nota, pago } = await this.db.transaccion(async c => {
       const p = await this.db.uno<any>(`SELECT p.id, p.reserva_id, p.monto_soles, p.metodo, p.referencia, p.pasarela, p.estado, r.codigo
@@ -77,10 +79,18 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
       }
 
       const automatica = AUTOMATICAS.includes(p.pasarela);
-      const dev = (await this.db.uno<any>(`INSERT INTO devoluciones (pago_id, reserva_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha_resultado)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      // La devolución manual queda en el turno de caja de quien la entrega; si es en efectivo, sale de su caja.
+      // El turno se bloquea después de la reserva, en el mismo orden que los cobros.
+      const efectivo = !automatica && p.metodo === 'Efectivo';
+      const turno = automatica ? null : await this.turnos.delUsuario(c, usuario.id, efectivo ? 'entregar una devolución en efectivo' : null, efectivo ? 'UPDATE' : 'SHARE');
+      if (efectivo) {
+        const caja = (await this.turnos.esperado(turno, c)).soles;
+        if (monto > caja + 0.001) throw falla(409, `En tu caja solo debería haber ${soles(caja)} en efectivo.`, 'monto');
+      }
+      const dev = (await this.db.uno<any>(`INSERT INTO devoluciones (pago_id, reserva_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha_resultado, turno_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
         [p.id, p.reservaId, monto, d.motivo, d.reducirTotal, automatica ? 'Pasarela' : 'Manual', p.pasarela, automatica ? 'Pendiente' : 'Completada',
-          null, registradoPor, automatica ? null : new Date()], c))!;
+          null, registradoPor, automatica ? null : new Date(), turno?.id ?? null], c))!;
       const origen = p.pasarela ? `en línea, ${p.pasarela}` : p.metodo;
       await this.bitacora.registrar({ accion: 'pago.devolver', entidad: 'reserva', entidadId: p.codigo,
         descripcion: `Devolución de ${soles(monto)} del pago de ${soles(p.montoSoles)} (${origen}) ${automatica ? `solicitada a ${p.pasarela}` : 'registrada'}${d.reducirTotal ? ' como descuento sobre el total' : ''}. Motivo: ${d.motivo}`.slice(0, 500),

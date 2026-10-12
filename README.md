@@ -71,7 +71,7 @@ Los errores de la API vuelven como `{ mensaje, campo }`, y el formulario marca e
   - Formulario de reserva con disponibilidad en vivo.
   - Mi reserva (con pago en línea), Libro de Reclamaciones (Ley 29571) y privacidad.
 - **Panel** (`/panel`):
-  - Dashboard, recepción, reservas, habitaciones (tablero por piso), clientes, caja, comprobantes electrónicos, reportes, tarifas, reclamaciones, usuarios, bitácora de auditoría y mi cuenta.
+  - Dashboard, recepción, reservas, habitaciones (tablero por piso), clientes, caja por turnos con arqueo, comprobantes electrónicos, reportes, tarifas, reclamaciones, usuarios, bitácora de auditoría y mi cuenta.
 - **Tailwind 4**: el tema va en `@theme` y las clases propias se declaran con `@utility`, que en v4 reemplaza el uso de `@apply` sobre `@layer components`.
 
 ### Zustand
@@ -129,6 +129,25 @@ La API abre el túnel con `ssh2` y se conecta a `PGHOST:PGPORT` desde el servido
   - **Concurrencia**: 6 personas reservan a la vez las 4 suites y se confirman exactamente 4, sin cruces.
   - Correos encolados (y su HTML escapado), cambio de habitación (incluido el huésped en curso sin falsos cruces), pagos en línea **idempotentes** (avisos repetidos o simultáneos registran un solo pago), boletas, facturas y exportación con **correlativo sin huecos** aunque se emitan a la vez, y bitácora inmodificable.
   - Notas de crédito parciales y totales, devoluciones manuales y por pasarela (también como descuento con nota de crédito automática), Culqi con 3-D Secure de punta a punta (con la API de Culqi simulada), recordatorio y encuesta sin duplicados, NPS y panel de correos.
+  - Caja por turnos: sin turno no se cobra en efectivo, efectivo esperado en soles y dólares, retiros que no superan la caja, arqueo con diferencia y observación obligatoria, revisión única del administrador, arqueo inmodificable y **cierre simultáneo con cobros** (cada pago queda en el arqueo o se rechaza).
+
+---
+
+## Caja por turnos y arqueo
+
+Cada recepcionista (o administrador) responde por el efectivo que maneja en su turno.
+
+- **Abrir turno** («Caja y pagos» → «Abrir turno», o desde el mismo cobro): se cuenta el **fondo inicial** para dar vuelto. Cada usuario tiene como máximo un turno abierto.
+- **Cobros**: un pago en **efectivo** exige el turno abierto de quien cobra. Los demás medios (tarjeta, Yape, Plin, transferencia) quedan en el turno si hay uno abierto, para cuadrarlos con el cierre del POS o los movimientos de Yape y del banco. Los pagos en línea no tienen turno.
+- **Devoluciones manuales**: salen del turno de quien las entrega; si son en efectivo, exigen su turno abierto y no pueden superar lo que debería haber en la caja.
+- **Ingresos y retiros** (depósito en la caja fuerte, sencillo recibido): en soles o dólares; un retiro no puede superar el efectivo esperado. No se borran: un error se corrige con el movimiento inverso.
+- **Efectivo esperado** = fondo inicial + cobros en efectivo − devoluciones en efectivo + ingresos − retiros. Los dólares se cuentan aparte, sin convertirlos; las devoluciones en efectivo se entregan en soles.
+- **Cerrar turno (arqueo)**: se cuenta la caja por billetes y monedas (o se escribe el total) y los dólares. Se guardan lo esperado, lo contado y la diferencia (faltante o sobrante); con diferencia, la observación es obligatoria. El reporte del turno se imprime con espacio para las firmas de quien entrega y quien recibe.
+- **Revisión**: el administrador ve los turnos de todos en «Turnos y arqueos» y marca cada arqueo como revisado una sola vez (no puede revisar el suyo). La campana avisa de arqueos con diferencia sin revisar y de turnos abiertos hace más de 12 horas.
+- **Integridad**: un arqueo cerrado no se modifica; triggers de PostgreSQL rechazan cambios (salvo la revisión), borrados y pagos, devoluciones o movimientos en un turno cerrado. Si después del cierre se anula un pago del turno, el arqueo guardado no cambia y el reporte muestra lo que hoy sería lo esperado.
+- **Bitácora y Power BI**: apertura, movimientos, cierre y revisión quedan en la bitácora; `vw_turnos_caja_powerbi` resume cada turno y `vw_pagos_powerbi` incluye el `turno_id`.
+
+Si ya tienes la base con datos, ejecuta `npm run db:migrar`. Los pagos anteriores quedan sin turno. Los datos de demostración incluyen una semana de turnos cerrados de Recepción, con un faltante ya revisado y un sobrante pendiente.
 
 ---
 
@@ -295,7 +314,8 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
 | «El puerto 3000/4000 ya está en uso» | Cierra la otra ventana con `npm run dev` |
 | Error de CORS | Agrega tu URL en `CORS_ORIGENES` (`apps/api/.env`) |
 | «Cerramos tu sesión por inactividad» | Pasaron 30 min sin uso; ajusta `NEXT_PUBLIC_PANEL_INACTIVIDAD_MIN` en `apps/web/.env.local` |
-| Error `relation "bitacora" does not exist`, `function pagado_neto does not exist` (o `devoluciones`, `encuestas`…) | La base es anterior a las mejoras: ejecuta `npm run db:migrar` |
+| Error `relation "bitacora" does not exist`, `function pagado_neto does not exist` (o `devoluciones`, `encuestas`, `turnos_caja`…) | La base es anterior a las mejoras: ejecuta `npm run db:migrar` |
+| «Abre tu turno de caja para cobrar en efectivo» | En «Caja y pagos» pulsa «Abrir turno» con el fondo inicial (también aparece el botón en el cobro) |
 | La campana avisa de correos fallidos | Abre «Correos», revisa el error (dirección inexistente, SMTP rechazado…) y pulsa «Reintentar» |
 | Los correos aparecen como «Simulado» | No hay `SMTP_HOST` en `apps/api/.env`: se registran pero no se envían |
 | No aparece «Pagar en línea» | Revisa `PASARELA` y sus credenciales (al arrancar, la API indica qué pasarela está activa) |

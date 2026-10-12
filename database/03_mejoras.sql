@@ -7,6 +7,7 @@
 --  · Facturación electrónica SUNAT mediante un OSE (boletas, facturas y notas de crédito)
 --  · Devoluciones de dinero (pasarela o manuales)
 --  · Recordatorio antes de la llegada y encuesta tras el check-out
+--  · Caja por turnos y arqueo
 --  Lo aplican «npm run db», «npm run db:demo» y, sobre una base existente,
 --  «npm run db:migrar». Ejecutar DESPUÉS de 01_esquema.sql.
 -- =====================================================================
@@ -298,3 +299,119 @@ CREATE TABLE IF NOT EXISTS encuestas (
   fecha_respuesta  timestamptz,
   CHECK ((fecha_respuesta IS NULL) = (calificacion IS NULL))
 );
+
+-- ---------------------------------------------------------------------
+-- 8. Caja por turnos y arqueo. Cada usuario abre su turno con un fondo
+--    inicial en efectivo; lo que cobra o devuelve en efectivo queda en su
+--    turno. Al cerrar cuenta la caja (arqueo) y se guardan lo esperado, lo
+--    contado y la diferencia (+ sobrante, − faltante). Un arqueo cerrado
+--    no se modifica: el administrador solo puede marcarlo como revisado.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS turnos_caja (
+  id                  int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  usuario_id          int           NOT NULL REFERENCES usuarios(id),
+  usuario             varchar(100)  NOT NULL,
+  estado              varchar(10)   NOT NULL DEFAULT 'Abierto' CHECK (estado IN ('Abierto','Cerrado')),
+  fondo_inicial       numeric(10,2) NOT NULL CHECK (fondo_inicial >= 0),            -- soles en efectivo al abrir
+  nota_apertura       varchar(200),
+  fecha_apertura      timestamptz   NOT NULL DEFAULT now(),
+  fecha_cierre        timestamptz,
+  cerrado_por         varchar(100),
+  esperado_soles      numeric(10,2),                                                -- según el sistema al cerrar
+  esperado_dolares    numeric(10,2),
+  contado_soles       numeric(10,2) CHECK (contado_soles >= 0),
+  contado_dolares     numeric(10,2) CHECK (contado_dolares >= 0),
+  diferencia_soles    numeric(10,2) GENERATED ALWAYS AS (contado_soles - esperado_soles) STORED,
+  diferencia_dolares  numeric(10,2) GENERATED ALWAYS AS (contado_dolares - esperado_dolares) STORED,
+  denominaciones      jsonb,                                                        -- billetes y monedas contados: {"200": 1, "0.5": 4}
+  observaciones       varchar(500),
+  revisado_por        varchar(100),
+  fecha_revision      timestamptz,
+  nota_revision       varchar(300),
+  CONSTRAINT ck_turno_cierre CHECK ((estado = 'Cerrado') = (fecha_cierre IS NOT NULL AND cerrado_por IS NOT NULL AND esperado_soles IS NOT NULL
+    AND esperado_dolares IS NOT NULL AND contado_soles IS NOT NULL AND contado_dolares IS NOT NULL)),
+  CONSTRAINT ck_turno_fechas CHECK (fecha_cierre IS NULL OR fecha_cierre >= fecha_apertura),
+  CONSTRAINT ck_turno_revision CHECK ((fecha_revision IS NULL) = (revisado_por IS NULL) AND (fecha_revision IS NULL OR estado = 'Cerrado'))
+);
+-- Un solo turno abierto por usuario
+CREATE UNIQUE INDEX IF NOT EXISTS ux_turno_abierto ON turnos_caja (usuario_id) WHERE estado = 'Abierto';
+CREATE INDEX IF NOT EXISTS ix_turnos_apertura ON turnos_caja (fecha_apertura DESC);
+
+CREATE TABLE IF NOT EXISTS movimientos_caja (
+  id              int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  turno_id        int           NOT NULL REFERENCES turnos_caja(id),
+  tipo            varchar(10)   NOT NULL CHECK (tipo IN ('Ingreso','Retiro')),     -- sencillo recibido, depósito en la caja fuerte…
+  moneda          varchar(3)    NOT NULL DEFAULT 'PEN' CHECK (moneda IN ('PEN','USD')),
+  monto           numeric(10,2) NOT NULL CHECK (monto > 0),
+  motivo          varchar(200)  NOT NULL,
+  registrado_por  varchar(100)  NOT NULL,
+  fecha           timestamptz   NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_movimientos_turno ON movimientos_caja (turno_id);
+
+-- Pagos y devoluciones registrados en el panel (los de la pasarela no tienen turno)
+ALTER TABLE pagos ADD COLUMN IF NOT EXISTS turno_id int REFERENCES turnos_caja(id);
+ALTER TABLE devoluciones ADD COLUMN IF NOT EXISTS turno_id int REFERENCES turnos_caja(id);
+CREATE INDEX IF NOT EXISTS ix_pagos_turno ON pagos (turno_id) WHERE turno_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_devoluciones_turno ON devoluciones (turno_id) WHERE turno_id IS NOT NULL;
+
+-- Solo se registra dinero en un turno abierto. FOR SHARE espera a un cierre en curso y luego ve el turno ya cerrado.
+CREATE OR REPLACE FUNCTION exigir_turno_abierto() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM 1 FROM turnos_caja WHERE id = NEW.turno_id AND estado = 'Abierto' FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'El turno de caja % ya está cerrado.', NEW.turno_id USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS tr_pagos_turno_abierto ON pagos;
+CREATE TRIGGER tr_pagos_turno_abierto BEFORE INSERT ON pagos
+  FOR EACH ROW WHEN (NEW.turno_id IS NOT NULL) EXECUTE FUNCTION exigir_turno_abierto();
+DROP TRIGGER IF EXISTS tr_devoluciones_turno_abierto ON devoluciones;
+CREATE TRIGGER tr_devoluciones_turno_abierto BEFORE INSERT ON devoluciones
+  FOR EACH ROW WHEN (NEW.turno_id IS NOT NULL) EXECUTE FUNCTION exigir_turno_abierto();
+DROP TRIGGER IF EXISTS tr_movimientos_turno_abierto ON movimientos_caja;
+CREATE TRIGGER tr_movimientos_turno_abierto BEFORE INSERT ON movimientos_caja
+  FOR EACH ROW EXECUTE FUNCTION exigir_turno_abierto();
+
+-- Un arqueo cerrado no cambia: solo se le agrega una vez la revisión del administrador. Nada se borra.
+CREATE OR REPLACE FUNCTION turno_caja_inmutable() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  revision text[] := ARRAY['revisado_por','fecha_revision','nota_revision','diferencia_soles','diferencia_dolares'];
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'Los turnos de caja no se borran.'; END IF;
+  IF OLD.estado = 'Cerrado' AND (OLD.fecha_revision IS NOT NULL OR (to_jsonb(NEW) - revision) IS DISTINCT FROM (to_jsonb(OLD) - revision)) THEN
+    RAISE EXCEPTION 'El arqueo del turno % ya está cerrado y no se puede modificar.', OLD.id;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS tr_turno_caja_inmutable ON turnos_caja;
+CREATE TRIGGER tr_turno_caja_inmutable BEFORE UPDATE OR DELETE ON turnos_caja
+  FOR EACH ROW EXECUTE FUNCTION turno_caja_inmutable();
+
+-- Los movimientos de caja tampoco se corrigen: se registra el movimiento inverso
+CREATE OR REPLACE FUNCTION movimiento_caja_inmutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Los movimientos de caja no se modifican ni se borran: registra el movimiento inverso.';
+END $$;
+DROP TRIGGER IF EXISTS tr_movimiento_caja_inmutable ON movimientos_caja;
+CREATE TRIGGER tr_movimiento_caja_inmutable BEFORE UPDATE OR DELETE ON movimientos_caja
+  FOR EACH ROW EXECUTE FUNCTION movimiento_caja_inmutable();
+
+-- Power BI: pagos con su turno y un resumen por turno (arqueo y cobros)
+CREATE OR REPLACE VIEW vw_pagos_powerbi AS
+SELECT p.id AS pago_id, p.fecha_pago, p.fecha_pago::date AS fecha_pago_dia, p.metodo, p.moneda, p.monto, p.tipo_cambio,
+       p.monto_soles, p.estado AS estado_pago, r.codigo AS codigo_reserva, t.nombre AS tipo_habitacion, p.turno_id
+FROM pagos p JOIN reservas r ON r.id = p.reserva_id JOIN habitaciones h ON h.id = r.habitacion_id
+JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id;
+
+DROP VIEW IF EXISTS vw_turnos_caja_powerbi;
+CREATE VIEW vw_turnos_caja_powerbi AS
+SELECT t.id AS turno_id, t.usuario, t.estado, t.fecha_apertura, (t.fecha_apertura AT TIME ZONE 'America/Lima')::date AS fecha_apertura_dia,
+       t.fecha_cierre, round(extract(epoch FROM coalesce(t.fecha_cierre, now()) - t.fecha_apertura) / 3600, 1) AS horas_abierto,
+       t.fondo_inicial, t.esperado_soles, t.contado_soles, t.diferencia_soles, t.esperado_dolares, t.contado_dolares, t.diferencia_dolares,
+       coalesce(p.cobrado, 0) AS cobrado_soles, coalesce(p.efectivo, 0) AS cobrado_efectivo_soles, coalesce(p.cantidad, 0) AS pagos,
+       (t.revisado_por IS NOT NULL) AS revisado
+FROM turnos_caja t
+LEFT JOIN (SELECT turno_id, sum(monto_soles) AS cobrado, sum(monto_soles) FILTER (WHERE metodo = 'Efectivo') AS efectivo, count(*) AS cantidad
+           FROM pagos WHERE estado = 'Aprobado' AND turno_id IS NOT NULL GROUP BY turno_id) p ON p.turno_id = t.id;

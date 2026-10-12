@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { CANALES, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, ROLES, TARIFAS_CAMBIO, TIPOS_DOCUMENTO } from './constantes';
+import { CANALES, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, MOVIMIENTOS_CAJA, ROLES, TARIFAS_CAMBIO, TIPOS_DOCUMENTO } from './constantes';
+import { DENOMINACIONES_SOLES, sumarDenominaciones } from './caja';
 import { validarDocumento, validarTelefono } from './documentos';
 import { diasEntre, hoyLima, sumarDias } from './fechas';
 
@@ -171,6 +172,42 @@ export const devolucionSchema = z.object({
   reducirTotal: z.boolean().default(false)
 });
 export type DevolucionInput = z.input<typeof devolucionSchema>;
+
+/* ---------------- Caja por turnos y arqueo ---------------- */
+/** Monto en efectivo: un campo vacío es un error, no un cero. */
+const efectivo = (msg: string) => z.preprocess(v => (v === '' || v === null ? undefined : v),
+  z.coerce.number({ error: msg }).min(0, 'El monto no puede ser negativo.').max(1_000_000).multipleOf(0.01, 'Usa como máximo 2 decimales.'));
+export const abrirTurnoSchema = z.object({
+  fondoInicial: efectivo('Escribe el fondo inicial en soles.'),
+  nota: opcional(200)
+});
+export type AbrirTurnoInput = z.input<typeof abrirTurnoSchema>;
+
+/** Ingreso (p. ej. sencillo) o retiro (p. ej. depósito en la caja fuerte) de efectivo durante el turno. */
+export const movimientoCajaSchema = z.object({
+  tipo: z.enum(MOVIMIENTOS_CAJA, { error: 'Elige ingreso o retiro.' }),
+  moneda: z.enum(['PEN', 'USD']),
+  monto: z.coerce.number({ error: 'Escribe el monto.' }).positive('El monto debe ser mayor a cero.').max(1_000_000).multipleOf(0.01, 'Usa como máximo 2 decimales.'),
+  motivo
+});
+export type MovimientoCajaInput = z.input<typeof movimientoCajaSchema>;
+
+/** Arqueo al cerrar el turno: efectivo contado (por billete y moneda, opcional) y dólares contados. */
+export const cerrarTurnoSchema = z.object({
+  denominaciones: z.record(z.string(), z.coerce.number().int('Cuenta unidades enteras.').min(0, 'No puede ser negativo.').max(100_000)).optional().nullable(),
+  contadoSoles: efectivo('Escribe el efectivo contado en soles.'),
+  contadoDolares: efectivo('Escribe los dólares contados.').default(0),
+  observaciones: opcional(500)
+}).superRefine((d, ctx) => {
+  if (!d.denominaciones) return;
+  const validas = DENOMINACIONES_SOLES.map(String);
+  if (Object.keys(d.denominaciones).some(k => !validas.includes(k)))
+    ctx.addIssue({ code: 'custom', message: 'Hay una denominación que no existe.', path: ['denominaciones'] });
+  else if (Math.abs(sumarDenominaciones(d.denominaciones) - d.contadoSoles) > 0.001)
+    ctx.addIssue({ code: 'custom', message: 'El total no coincide con el conteo por billetes y monedas.', path: ['contadoSoles'] });
+});
+export type CerrarTurnoInput = z.input<typeof cerrarTurnoSchema>;
+export const revisarTurnoSchema = z.object({ nota: opcional(300) });
 
 /** Encuesta tras la estadía: calificación de 1 a 5 y recomendación de 0 a 10 (NPS). */
 export const encuestaSchema = z.object({

@@ -11,6 +11,7 @@ import { avisar } from '@/stores/avisos';
 import { BotonP, Estado, Modal } from './base';
 import { AlertaForm, Campo } from './campo';
 import { esVigente } from './comprobantes';
+import { AvisoTurno, useTurno } from './caja';
 
 const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Niubiz', 'Simulada'];
 const titulo = 'mb-2 text-xs font-medium uppercase tracking-[0.14em] text-gold-dark';
@@ -64,6 +65,9 @@ export function FormularioDevolucion({ pago: p, r, comprobante, abierto, alCerra
   const { register, handleSubmit, watch, reset, setError, formState: { errors, isSubmitting } } = useForm<DevolucionInput, unknown, any>({ resolver: zodResolver(devolucionSchema) });
   useEffect(() => { if (p) { reset({ monto: Number(p.disponibleDevolucion.toFixed(2)), motivo: '', reducirTotal: false }); setGeneral(null); } }, [p, reset]);
   const monto = Number(watch('monto')) || 0, reducir = !!watch('reducirTotal');
+  // Las devoluciones manuales en efectivo salen de la caja del turno de quien las entrega
+  const efectivo = !!p && !AUTOMATICAS.includes(p.pasarela) && p.metodo === 'Efectivo';
+  const { turno, cargado } = useTurno(efectivo && abierto);
   const enviar = handleSubmit(async d => {
     setGeneral(null);
     try {
@@ -85,6 +89,9 @@ export function FormularioDevolucion({ pago: p, r, comprobante, abierto, alCerra
         <AlertaForm texto={general} />
         <p className="text-sm text-muted">Pago del {fechaHora(p.fechaPago)} por {soles(p.montoSoles)} · disponible para devolver: <strong className="text-ink">{soles(p.disponibleDevolucion)}</strong></p>
         <p className="rounded-lg bg-sand p-3 text-sm">{medio}</p>
+        {efectivo && cargado && (turno
+          ? <p className="text-sm text-muted">El efectivo sale de tu turno de caja N.° {turno.id}: debería haber {soles(turno.resumen.esperado.soles)}.</p>
+          : <AvisoTurno texto="Para entregar una devolución en efectivo abre tu turno de caja." />)}
         <div className="grid gap-4 sm:grid-cols-3">
           <Campo etiqueta="Monto (S/)" error={errors.monto?.message as string}><input type="number" step="0.01" min="0.01" max={p.disponibleDevolucion} {...register('monto')} /></Campo>
           <Campo etiqueta="Motivo" className="sm:col-span-2" error={errors.motivo?.message as string}><input maxLength={200} placeholder="p. ej. cancelación, noche no usada, cobro duplicado" {...register('motivo')} /></Campo>
