@@ -2,8 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { FileText, ReceiptText, RefreshCw, XCircle } from 'lucide-react';
-import { comprobanteSchema, TIPOS_COMPROBANTE, type ComprobanteInput } from '@marea/shared';
+import { FileMinus, FileText, ReceiptText, RefreshCw, XCircle } from 'lucide-react';
+import { comprobanteSchema, diasEntre, hoyLima, MOTIVOS_NC_TOTALES, MOTIVOS_NOTA_CREDITO, notaCreditoSchema, redondear, TIPOS_COMPROBANTE, type ComprobanteInput, type NotaCreditoInput } from '@marea/shared';
 import { ApiError } from '@/lib/api';
 import { fechaMedia, soles } from '@/lib/formato';
 import { apiPanel, refrescar, useSesion } from '@/stores/sesion';
@@ -80,35 +80,87 @@ export function FormularioComprobante({ r, abierto, alCerrar, alEmitir }: { r: a
   );
 }
 
-/** Sección «Comprobante electrónico» de la ficha de la reserva. */
+/** Boleta o factura vigente: no es nota de crédito, ni rechazada, dada de baja o neutralizada por una nota total. */
+export const esVigente = (k: any) => k.tipo !== '07' && !['Rechazado', 'Anulado'].includes(k.estado) && !k.anuladoConNota;
+/** Se puede emitir nota de crédito: comprobante vigente aceptado con importe por rebajar. */
+export const admiteNota = (k: any) => esVigente(k) && ['Aceptado', 'Observado'].includes(k.estado) && k.disponibleNota > 0.009;
+/** Baja: hasta 7 días y sin notas de crédito previas; si no, corresponde una nota de crédito. */
+export const admiteBaja = (k: any) => admiteNota(k) && Math.abs(k.disponibleNota - k.total) < 0.005 && diasEntre(String(k.fechaEmision).slice(0, 10), hoyLima()) <= 7;
+
+/** Nota de crédito (administrador): anulación total, error en el RUC o disminución parcial del valor. */
+export function FormularioNotaCredito({ k, abierto, alCerrar, alEmitir }: { k: any; abierto: boolean; alCerrar: () => void; alEmitir?: () => void }) {
+  const [general, setGeneral] = useState<string | null>(null);
+  const { register, handleSubmit, watch, reset, setError, formState: { errors, isSubmitting } } = useForm<NotaCreditoInput, unknown, any>({ resolver: zodResolver(notaCreditoSchema) });
+  useEffect(() => { if (k) { reset({ motivo: '09', monto: '' as any, sustento: '' }); setGeneral(null); } }, [k, reset]);
+  const motivo = watch('motivo'), monto = Number(watch('monto')) || 0;
+  const enviar = handleSubmit(async d => {
+    setGeneral(null);
+    try {
+      const x = await apiPanel(`/gestion/comprobantes/${k.id}/nota-credito`, { method: 'POST', body: d });
+      avisar(x.mensaje, x.estado === 'Rechazado' ? 'warn' : 'ok'); if (x.advertencia && x.estado !== 'Rechazado') avisar(x.advertencia, 'warn');
+      alCerrar(); alEmitir?.(); refrescar();
+    } catch (e) { const er = e as ApiError; if (er.campo) setError(er.campo as any, { message: er.message }, { shouldFocus: true }); else setGeneral(er.message); }
+  });
+  if (!k) return null;
+  const total = MOTIVOS_NC_TOTALES.includes(motivo);
+  const motivos = Object.entries(MOTIVOS_NOTA_CREDITO).filter(([m]) => m !== '02' || k.tipo === '01');
+  return (
+    <Modal abierto={abierto} alCerrar={alCerrar} titulo={`Nota de crédito · ${nombreComprobante(k)}`}
+      pie={<><BotonP variante="claro" onClick={alCerrar}>Cancelar</BotonP><BotonP variante="peligro" disabled={isSubmitting} onClick={enviar}><FileMinus className="size-4" />{isSubmitting ? 'Enviando a SUNAT…' : 'Emitir nota de crédito'}</BotonP></>}>
+      <form onSubmit={enviar} noValidate className="grid gap-4">
+        <AlertaForm texto={general} />
+        <p className="text-sm text-muted">{k.clienteNombre} ({k.clienteNumDoc}) · total {soles(k.total)} · por rebajar: <strong className="text-ink">{soles(k.disponibleNota)}</strong></p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Campo etiqueta="Motivo (catálogo 09 de SUNAT)" className="sm:col-span-2" error={errors.motivo?.message as string}>
+            <select {...register('motivo')}>{motivos.map(([m, t]) => <option key={m} value={m}>{m} · {t}</option>)}</select></Campo>
+          {!total && <Campo etiqueta="Monto (S/)" error={errors.monto?.message as string}><input type="number" step="0.01" min="0.01" max={k.disponibleNota} {...register('monto')} /></Campo>}
+          <Campo etiqueta="Sustento" className="sm:col-span-3" error={errors.sustento?.message as string} ayuda="Aparece en la nota de crédito y en la bitácora.">
+            <input maxLength={250} placeholder="p. ej. descuento por falla del aire acondicionado" {...register('sustento')} /></Campo>
+        </div>
+        <p className="rounded-lg bg-sand p-3 text-sm">{total
+          ? `Por ${soles(k.disponibleNota)}. Al aceptarla SUNAT, la ${nombreComprobante(k)} queda neutralizada y podrás emitir otra si corresponde. No mueve dinero: si hay que devolver, hazlo desde el pago.`
+          : `Baja el total de la reserva en ${soles(monto)}${monto > 0 ? ` (en el comprobante quedarán ${soles(redondear(k.disponibleNota - monto))})` : ''}. Si el huésped ya pagó, quedará saldo a favor para devolver desde el pago.`}</p>
+      </form>
+    </Modal>
+  );
+}
+
+/** Sección «Comprobantes electrónicos» de la ficha de la reserva. */
 export function SeccionComprobantes({ r, comprobantes, alCambiar }: { r: any; comprobantes: any[]; alCambiar: () => void }) {
   const admin = useSesion(s => s.usuario?.rol === 'Administrador');
   const [emitir, setEmitir] = useState(false);
   const [anular, setAnular] = useState<any>(null);
-  const vigente = comprobantes.find(k => !['Rechazado', 'Anulado'].includes(k.estado));
+  const [nota, setNota] = useState<any>(null);
+  const vigente = comprobantes.find(esVigente);
   const pagada = r.pagado > 0.009 && r.saldo <= 0.009;
   const puede = !vigente && !['Cancelada', 'NoShow'].includes(r.estado);
   return (
-    <section aria-label="Comprobante electrónico">
+    <section aria-label="Comprobantes electrónicos">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-xs font-medium uppercase tracking-[0.14em] text-gold-dark">Comprobante electrónico</h3>
+        <h3 className="text-xs font-medium uppercase tracking-[0.14em] text-gold-dark">Comprobantes electrónicos</h3>
         {puede && pagada && <BotonP variante="claro" className="!min-h-8" onClick={() => setEmitir(true)}><ReceiptText className="size-4" />Emitir</BotonP>}
       </div>
       {comprobantes.length ? <ul className="divide-y divide-line text-sm">{comprobantes.map(k => (
-        <li key={k.id} className="grid gap-1 py-2">
-          <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 font-medium"><FileText className="size-4 text-muted" aria-hidden />{nombreComprobante(k)}</span><Estado valor={k.estado} /></div>
-          <span className="text-xs text-muted">{fechaMedia(k.fechaEmision)} · {k.clienteNombre} ({k.clienteNumDoc}) · {soles(k.total)}{k.proveedor === 'Simulado' ? ' · simulado' : ''}</span>
+        <li key={k.id} className={`grid gap-1 py-2 ${k.tipo === '07' ? 'pl-4' : ''}`}>
+          <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 font-medium">
+            {k.tipo === '07' ? <FileMinus className="size-4 text-bad" aria-hidden /> : <FileText className="size-4 text-muted" aria-hidden />}{nombreComprobante(k)}</span><Estado valor={k.estado} /></div>
+          <span className="text-xs text-muted">{fechaMedia(k.fechaEmision)} · {k.clienteNombre} ({k.clienteNumDoc}) · {k.tipo === '07' ? '−' : ''}{soles(k.total)}{k.proveedor === 'Simulado' ? ' · simulado' : ''}</span>
+          {k.tipo === '07' && <span className="text-xs text-muted">Modifica {TIPOS_COMPROBANTE[k.refTipo]} {k.refSerie}-{k.refNumero} · {MOTIVOS_NOTA_CREDITO[k.motivoNota]}: {k.sustento}</span>}
+          {k.anuladoConNota && <span className="text-xs text-bad">Neutralizado con la nota de crédito {k.anuladoConNota}</span>}
+          {k.tipo !== '07' && !k.anuladoConNota && k.disponibleNota < k.total - 0.005 && <span className="text-xs text-muted">Rebajado con notas de crédito: quedan {soles(k.disponibleNota)}</span>}
           {k.mensaje && k.estado !== 'Aceptado' && <span className="text-xs text-muted">{k.mensaje}</span>}
           {k.motivoAnulacion && <span className="text-xs text-bad">Anulado: {k.motivoAnulacion}</span>}
           <div className="flex flex-wrap items-center gap-2">
             <EnlacesComprobante k={k} />
             {k.estado === 'Pendiente' && <button className="inline-flex items-center gap-1 text-xs text-ocean underline" onClick={() => sincronizarComprobante(k.id, alCambiar)}><RefreshCw className="size-3" />Actualizar estado</button>}
-            {admin && ['Aceptado', 'Observado'].includes(k.estado) && <button className="inline-flex items-center gap-1 text-xs text-bad underline" onClick={() => setAnular(k)}><XCircle className="size-3" />Anular</button>}
+            {admin && admiteNota(k) && <button className="inline-flex items-center gap-1 text-xs text-bad underline" onClick={() => setNota(k)}><FileMinus className="size-3" />Nota de crédito</button>}
+            {admin && admiteBaja(k) && <button className="inline-flex items-center gap-1 text-xs text-bad underline" onClick={() => setAnular(k)}><XCircle className="size-3" />Dar de baja</button>}
           </div>
         </li>))}</ul>
         : <p className="text-sm text-muted">{puede && !pagada ? 'Se emite cuando la reserva esté pagada por completo.' : 'Sin comprobantes.'}</p>}
       <FormularioComprobante r={r} abierto={emitir} alCerrar={() => setEmitir(false)} alEmitir={alCambiar} />
       <FormAnularComprobante k={anular} abierto={!!anular} alCerrar={() => { setAnular(null); alCambiar(); }} />
+      <FormularioNotaCredito k={nota} abierto={!!nota} alCerrar={() => setNota(null)} alEmitir={alCambiar} />
     </section>
   );
 }

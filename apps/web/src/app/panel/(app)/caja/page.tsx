@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { Banknote, CreditCard, Landmark, Printer, Smartphone, Vault, XCircle } from 'lucide-react';
-import { hoyLima, sumarDias } from '@marea/shared';
+import { Banknote, CreditCard, Landmark, Printer, Smartphone, Undo2, Vault, XCircle } from 'lucide-react';
+import { ETIQUETAS, hoyLima, sumarDias } from '@marea/shared';
 import { fechaHora, fechaMedia, soles, soles0 } from '@/lib/formato';
 import { useSesion } from '@/stores/sesion';
 import { BotonP, Cabecera, Cargando, Estado, Kpi, useDatos } from '@/components/panel/base';
@@ -30,6 +30,14 @@ export default function Caja() {
     ...(admin ? [c.display({ id: 'acciones', header: () => <span className="sr-only">Acciones</span>, cell: i => i.row.original.estado === 'Aprobado' ?
       <button onClick={() => setAnular(i.row.original)} aria-label={`Anular pago de ${i.row.original.cliente}`} className="grid size-8 place-items-center rounded-lg text-bad hover:bg-bad-bg"><XCircle className="size-4" /></button> : null })] : [])
   ];
+  const colsDev = [
+    c.accessor(x => x.fechaResultado ?? x.fecha, { id: 'fecha', header: 'Fecha', cell: i => fechaHora(i.getValue()) }),
+    c.accessor('codigoReserva', { header: 'Reserva', cell: i => <button className="font-mono font-semibold text-ocean underline decoration-gold" onClick={() => abrir(i.getValue())}>{i.getValue()}</button> }),
+    c.accessor('cliente', { header: 'Cliente' }),
+    c.accessor('medio', { header: 'Medio', cell: i => <>{i.getValue() === 'Pasarela' ? ETIQUETAS[i.row.original.pasarela] ?? i.row.original.pasarela : `Manual · ${i.row.original.metodo}`}<span className="block text-xs text-muted">{i.row.original.motivo}{i.row.original.reduceTotal ? ' · descuento' : ''}</span></> }),
+    c.accessor('monto', { header: 'Monto', meta: { derecha: true }, cell: i => <span className="text-bad">−{soles(i.getValue())}</span> }),
+    c.accessor('estado', { header: 'Estado', cell: i => <><Estado valor={i.getValue()} />{i.row.original.estado !== 'Completada' && i.row.original.mensaje && <span className="block max-w-56 text-xs text-muted">{i.row.original.mensaje}</span>}</> })
+  ];
   const sel = 'h-10 rounded-lg border border-[#D9D6CE] bg-white px-2 text-sm';
   return (
     <>
@@ -42,7 +50,8 @@ export default function Caja() {
       </div>
       {!d ? <Cargando /> : <>
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
-          <div className="col-span-2"><Kpi icono={Vault} tono="ok" etiqueta={`Total cobrado · ${desde === hasta ? fechaMedia(desde) : `${fechaMedia(desde)} – ${fechaMedia(hasta)}`}`} valor={soles(d.total)} sub={`${d.cantidad} pago(s) aprobados`} /></div>
+          <div className="col-span-2"><Kpi icono={Vault} tono="ok" etiqueta={`${d.devuelto ? 'Neto cobrado' : 'Total cobrado'} · ${desde === hasta ? fechaMedia(desde) : `${fechaMedia(desde)} – ${fechaMedia(hasta)}`}`} valor={soles(d.neto)}
+            sub={d.devuelto ? `${soles(d.total)} cobrado − ${soles(d.devuelto)} devuelto` : `${d.cantidad} pago(s) aprobados`} /></div>
           {d.porMetodo.map((m: any) => <Kpi key={m.metodo} icono={ICONO[m.metodo] ?? Banknote} etiqueta={m.metodo} valor={soles0(m.monto)} sub={`${m.cantidad} pago(s)`} />)}
         </div>
         <section className="overflow-hidden rounded-2xl border border-line bg-white" aria-label="Pagos">
@@ -50,6 +59,12 @@ export default function Caja() {
             csv={{ nombre: `caja-${desde}-${hasta}.csv`, encabezados: ['Fecha', 'Reserva', 'Cliente', 'Método', 'Moneda', 'Monto', 'Tipo de cambio', 'Monto S/', 'Referencia', 'Estado', 'Registró'],
               filas: p => [p.fechaPago, p.codigoReserva, p.cliente, p.metodo, p.moneda, p.monto, p.tipoCambio, p.montoSoles, p.referencia, p.estado, p.registradoPor ?? 'Web'] }} />
         </section>
+        {d.devoluciones.length > 0 && <section className="mt-4 overflow-hidden rounded-2xl border border-line bg-white" aria-label="Devoluciones">
+          <h2 className="flex items-center gap-2 px-5 pt-4 font-medium"><Undo2 className="size-4 text-gold-dark" aria-hidden />Devoluciones del periodo</h2>
+          <Tabla etiqueta="devoluciones" datos={d.devoluciones} columnas={colsDev} buscador={false} vacio="Sin devoluciones."
+            csv={{ nombre: `devoluciones-${desde}-${hasta}.csv`, encabezados: ['Fecha', 'Reserva', 'Cliente', 'Monto', 'Medio', 'Pasarela', 'Estado', 'Motivo', 'Descuento', 'Registró'],
+              filas: x => [x.fechaResultado ?? x.fecha, x.codigoReserva, x.cliente, x.monto, x.medio, x.pasarela, x.estado, x.motivo, x.reduceTotal ? 'Sí' : 'No', x.registradoPor] }} />
+        </section>}
       </>}
       <FormAnular pago={anular} abierto={!!anular} alCerrar={() => setAnular(null)} />
     </>

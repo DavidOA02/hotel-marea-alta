@@ -16,6 +16,7 @@ import { BotonP, Cargando, confirmar, Estado, Modal, PanelLateral } from './base
 import { AlertaForm, Campo } from './campo';
 import { FormularioCambioHabitacion } from './cambio-habitacion';
 import { SeccionComprobantes } from './comprobantes';
+import { SeccionPagos } from './devoluciones';
 
 /* ---------- Stores (Zustand) para abrir la ficha y los formularios desde cualquier vista ---------- */
 export const useFicha = create<{ codigo: string | null; abrir: (c: string) => void; cerrar: () => void }>(set => ({ codigo: null, abrir: codigo => set({ codigo }), cerrar: () => set({ codigo: null }) }));
@@ -85,13 +86,7 @@ export function FichaReserva() {
           <div className="flex justify-between py-0.5"><span>Pagado</span><span className="tabular-nums">{soles(r.pagado)}</span></div>
           <div className={`flex justify-between py-0.5 font-medium ${r.saldo > 0.009 ? 'text-bad' : ''}`}><span>Saldo</span><span className="tabular-nums">{soles(r.saldo)}</span></div>
         </div>
-        <section aria-label="Pagos"><h3 className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-gold-dark">Pagos</h3>
-          {d.pagos.length ? <ul className="divide-y divide-line text-sm">{d.pagos.map((p: any) => (
-            <li key={p.id} className="flex items-center justify-between gap-3 py-2">
-              <span>{fechaHora(p.fechaPago)}<span className="block text-xs text-muted">{p.pasarela ? `En línea · ${ETIQUETAS[p.pasarela] ?? p.pasarela} · ${p.metodo}` : p.metodo}{p.referencia ? ' · ' + p.referencia : ''}{p.registradoPor && !p.pasarela ? ' · ' + p.registradoPor : ''}</span></span>
-              <span className="text-right tabular-nums">{p.moneda === 'USD' ? `US$ ${p.monto.toFixed(2)} → ` : ''}{soles(p.montoSoles)}<span className="block"><Estado valor={p.estado} /></span></span>
-            </li>))}</ul> : <p className="text-sm text-muted">Sin pagos registrados.</p>}
-        </section>
+        <SeccionPagos r={r} pagos={d.pagos} devoluciones={d.devoluciones} comprobantes={d.comprobantes} alCambiar={recargar} />
         <SeccionComprobantes r={r} comprobantes={d.comprobantes} alCambiar={recargar} />
         <SeccionCorreos r={r} correos={d.correos} alCambiar={recargar} />
         <Historial r={r} historial={d.historial} />

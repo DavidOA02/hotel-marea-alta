@@ -18,6 +18,13 @@ describe('Nubefact (OSE/PSE)', () => {
     expect(cuerpoNubefact(exportacion)).toMatchObject({ tipo_de_comprobante: 1, sunat_transaction: 2, cliente_tipo_de_documento: '7', total_inafecta: 762.71, total_igv: 0,
       items: [{ tipo_de_igv: 16, igv: 0 }] });
   });
+  it('nota de crédito: tipo 3 con el documento que modifica y el motivo del catálogo 09', () => {
+    const nota: DocumentoElectronico = { ...boleta, tipo: '07', serie: 'BC01', numero: 1, gravada: 169.49, igv: 30.51, total: 200,
+      nota: { tipo: '03', serie: 'B001', numero: 7, motivo: '09', sustento: 'Descuento por reclamo' } };
+    expect(cuerpoNubefact(nota)).toMatchObject({ tipo_de_comprobante: 3, serie: 'BC01', documento_que_se_modifica_tipo: 2, documento_que_se_modifica_serie: 'B001',
+      documento_que_se_modifica_numero: 7, tipo_de_nota_de_credito: 9, observaciones: 'Descuento por reclamo', total: 200 });
+    expect(cuerpoNubefact(boleta)).not.toHaveProperty('documento_que_se_modifica_tipo');
+  });
   it('interpreta la respuesta: aceptado, observado, rechazado o pendiente (resumen diario)', () => {
     expect(interpretarNubefact({ aceptada_por_sunat: true, sunat_responsecode: '0', sunat_description: 'La Boleta numero B001-7, ha sido aceptada', enlace_del_pdf: 'https://x/pdf' }))
       .toMatchObject({ estado: 'Aceptado', enlacePdf: 'https://x/pdf' });

@@ -37,37 +37,67 @@ async function llamar(url: string, init: { method?: string; headers?: Record<str
 const enlaceRetorno = (o: { id: string }) => `${urlWeb()}/pago?orden=${o.id}`;
 const centimos = (monto: number) => Math.round(monto * 100);
 
+/** Resultado de una devolución en la pasarela. «Pendiente» = la pasarela aún la procesa. */
+export interface ResultadoDevolucion { estado: 'Completada' | 'Fallida' | 'Pendiente'; referencia: string | null; mensaje: string; respuesta: Record<string, unknown> }
+
 /* ---------------- Simulada ---------------- */
 export const Simulada = {
   preparar: async (_o: Orden) => ({ modo: 'simulada' }),
   resultado: (o: Orden, aprobar: boolean): Resultado => aprobar
     ? { aprobado: true, referencia: `SIM-${o.numero}`, metodo: 'Tarjeta', mensaje: 'Pago simulado aprobado.', respuesta: { simulado: true } }
-    : { aprobado: false, referencia: null, metodo: 'Tarjeta', mensaje: 'Pago simulado rechazado.', respuesta: { simulado: true } }
+    : { aprobado: false, referencia: null, metodo: 'Tarjeta', mensaje: 'Pago simulado rechazado.', respuesta: { simulado: true } },
+  devolver: async (idDevolucion: number): Promise<ResultadoDevolucion> =>
+    ({ estado: 'Completada', referencia: `SIM-DEV-${idDevolucion}`, mensaje: 'Devolución simulada.', respuesta: { simulado: true } })
 };
 
 /* ---------------- Culqi ---------------- */
+/** Parámetros que entrega Culqi3DS en el navegador cuando el banco autentica al titular. */
+export interface Autenticacion3DS { eci: string; xid: string; cavv: string; protocolVersion: string; directoryServerTransactionId?: string }
+const culqiCabeceras = () => ({ Authorization: `Bearer ${process.env.CULQI_LLAVE_SECRETA}` });
+
 export const Culqi = {
   preparar: async (o: Orden) => ({
-    llavePublica: process.env.CULQI_LLAVE_PUBLICA, script: 'https://js.culqi.com/checkout-js', montoCentimos: centimos(o.monto), moneda: 'PEN'
+    llavePublica: process.env.CULQI_LLAVE_PUBLICA, script: 'https://js.culqi.com/checkout-js', script3DS: 'https://3ds.culqi.com',
+    montoCentimos: centimos(o.monto), moneda: 'PEN'
   }),
-  /** Crea el cargo con el token de Culqi Checkout (tarjeta «tkn_…» o Yape «ype_…»). */
-  async cobrar(o: Orden, token: string): Promise<Resultado> {
+  /**
+   * Crea el cargo con el token de Culqi Checkout (tarjeta «tkn_…» o Yape «ype_…»).
+   * Si el antifraude pide 3-D Secure (action_code REVIEW) no hay cargo: el navegador autentica con Culqi3DS
+   * y se vuelve a llamar con el mismo token, el mismo dispositivo y los parámetros 3DS.
+   * Se decide por el cuerpo de la respuesta (object «charge» o action_code), no por el código HTTP.
+   */
+  async cobrar(o: Orden, token: string, extra: { dispositivo?: string | null; autenticacion?: Autenticacion3DS | null } = {}): Promise<Resultado | { requiere3DS: true }> {
     const metodo: MetodoPago = token.startsWith('ype_') ? 'Yape' : 'Tarjeta';
     const r = await llamar('https://api.culqi.com/v2/charges', {
-      method: 'POST', headers: { Authorization: `Bearer ${process.env.CULQI_LLAVE_SECRETA}` },
+      method: 'POST', headers: culqiCabeceras(),
       json: { amount: centimos(o.monto), currency_code: 'PEN', email: o.email, source_id: token, description: `Reserva ${o.codigoReserva}`.slice(0, 80),
-        metadata: { orden: o.id, reserva: o.codigoReserva } }
+        metadata: { orden: o.id, reserva: o.codigoReserva },
+        ...(extra.dispositivo ? { antifraud_details: { device_finger_print_id: extra.dispositivo } } : {}),
+        ...(extra.autenticacion ? { authentication_3DS: extra.autenticacion } : {}) }
     });
     const b = r.cuerpo ?? {};
-    if (r.status === 201 && b.object === 'charge') {
+    if (r.ok && b.object === 'charge') {
       return { aprobado: true, referencia: b.id, metodo, mensaje: b.outcome?.user_message ?? b.user_message ?? 'Pago aprobado.',
-        respuesta: { id: b.id, referencia: b.reference_code, codigo: b.outcome?.code ?? b.response_code, tarjeta: b.source?.last_four ? `****${b.source.last_four}` : undefined } };
+        respuesta: { id: b.id, referencia: b.reference_code, codigo: b.outcome?.code ?? b.response_code, tarjeta: b.source?.last_four ? `****${b.source.last_four}` : undefined, autenticado3DS: !!extra.autenticacion } };
     }
-    if (b.action_code === 'REVIEW')   // la tarjeta pide 3-D Secure: no hubo cargo
-      return { aprobado: false, referencia: null, metodo, mensaje: 'Tu banco pide una validación adicional (3-D Secure). Prueba con otra tarjeta o paga con Yape.', respuesta: { action_code: b.action_code } };
+    if (b.action_code === 'REVIEW') {
+      if (!extra.autenticacion) return { requiere3DS: true };   // aún sin cargo: falta autenticar en el navegador
+      return { aprobado: false, referencia: null, metodo, mensaje: 'Tu banco no pudo confirmar la autenticación 3-D Secure. Prueba con otra tarjeta o paga con Yape.', respuesta: { action_code: b.action_code } };
+    }
     if (r.status >= 500) throw new ErrorPasarela(`Culqi respondió ${r.status}.`);
     return { aprobado: false, referencia: b.charge_id ?? null, metodo, mensaje: b.user_message ?? 'El pago fue rechazado.',
       respuesta: { tipo: b.type, codigo: b.code ?? b.decline_code, mensaje: b.merchant_message } };
+  },
+  /** Devolución total o parcial de un cargo (POST /v2/refunds). */
+  async devolver(cargo: string, monto: number): Promise<ResultadoDevolucion> {
+    if (!/^chr_[A-Za-z0-9_]+$/.test(cargo)) return { estado: 'Fallida', referencia: null, mensaje: `«${cargo}» no es un cargo de Culqi: devuelve el dinero desde el CulqiPanel.`, respuesta: {} };
+    const r = await llamar('https://api.culqi.com/v2/refunds', {
+      method: 'POST', headers: culqiCabeceras(), json: { amount: centimos(monto), charge_id: cargo, reason: 'solicitud_comprador' }
+    });
+    const b = r.cuerpo ?? {};
+    if (r.ok && b.object === 'refund') return { estado: 'Completada', referencia: b.id, mensaje: 'Devolución registrada en Culqi.', respuesta: { id: b.id, monto: b.amount, cargo: b.charge_id } };
+    if (r.status >= 500) throw new ErrorPasarela(`Culqi respondió ${r.status} a la devolución.`);
+    return { estado: 'Fallida', referencia: null, mensaje: b.merchant_message ?? b.user_message ?? `Culqi rechazó la devolución (${r.status}).`, respuesta: { tipo: b.type, codigo: b.code } };
   }
 };
 
@@ -105,6 +135,16 @@ export const MercadoPago = {
     if (['rejected', 'cancelled', 'refunded', 'charged_back'].includes(p.status))
       return { ...base, resultado: { aprobado: false, referencia: String(p.id), metodo, mensaje: `Mercado Pago no aprobó el pago (${p.status_detail ?? p.status}).`, respuesta } };
     return { ...base, resultado: null };   // pending, in_process, authorized…
+  },
+  /** Devolución total o parcial (POST /v1/payments/{id}/refunds). La clave de idempotencia permite reintentar sin devolver dos veces. */
+  async devolver(pagoId: string, monto: number, clave: string): Promise<ResultadoDevolucion> {
+    if (!/^\d{1,20}$/.test(pagoId)) return { estado: 'Fallida', referencia: null, mensaje: `«${pagoId}» no es un pago de Mercado Pago.`, respuesta: {} };
+    const r = await llamar(`${MP}/v1/payments/${pagoId}/refunds`, { method: 'POST', headers: { ...mpCabeceras(), 'X-Idempotency-Key': clave }, json: { amount: monto } });
+    const b = r.cuerpo ?? {};
+    if (r.status >= 500) throw new ErrorPasarela(`Mercado Pago respondió ${r.status} a la devolución.`);
+    if (!r.ok) return { estado: 'Fallida', referencia: null, mensaje: `Mercado Pago rechazó la devolución: ${b.message ?? r.status}.`, respuesta: { codigo: b.cause?.[0]?.code ?? b.status, mensaje: b.message } };
+    const estado = b.status === 'approved' ? 'Completada' : ['rejected', 'cancelled'].includes(b.status) ? 'Fallida' : 'Pendiente';
+    return { estado, referencia: b.id != null ? String(b.id) : null, mensaje: `Devolución ${b.status ?? 'registrada'} en Mercado Pago.`, respuesta: { id: b.id, estado: b.status, monto: b.amount } };
   }
 };
 

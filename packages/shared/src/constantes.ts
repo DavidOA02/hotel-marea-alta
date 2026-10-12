@@ -17,7 +17,14 @@ export const TIPOS_DOCUMENTO = ['DNI', 'CE', 'PAS'] as const;
 export const TARIFAS_CAMBIO = ['Mantener', 'Recalcular'] as const;
 export const ESTADOS_COMPROBANTE = ['Pendiente', 'Aceptado', 'Observado', 'Rechazado', 'Anulado'] as const;
 /** Catálogo 01 de SUNAT. */
-export const TIPOS_COMPROBANTE: Record<string, string> = { '01': 'Factura', '03': 'Boleta' };
+export const TIPOS_COMPROBANTE: Record<string, string> = { '01': 'Factura', '03': 'Boleta', '07': 'Nota de crédito' };
+/** Catálogo 09 de SUNAT (motivos de nota de crédito que usa el hotel). */
+export const MOTIVOS_NOTA_CREDITO: Record<string, string> = {
+  '01': 'Anulación de la operación', '02': 'Anulación por error en el RUC', '06': 'Devolución total', '09': 'Disminución en el valor'
+};
+/** Motivos que anulan el comprobante completo; el resto es parcial. */
+export const MOTIVOS_NC_TOTALES = ['01', '02', '06'];
+export const DIAS_RECORDATORIO = 2;
 export const ENTIDADES_BITACORA = ['reserva', 'pago', 'cliente', 'habitacion', 'tipo', 'usuario', 'reclamo', 'comprobante', 'correo', 'sesion'] as const;
 
 export const ETIQUETAS: Record<string, string> = {
@@ -29,5 +36,6 @@ export const ETIQUETAS: Record<string, string> = {
   Aceptado: 'Aceptado', Observado: 'Aceptado con observaciones', Rechazado: 'Rechazado', Enviado: 'Enviado', Simulado: 'Simulado', Fallido: 'Fallido',
   Mantener: 'Mantener tarifa', Recalcular: 'Recalcular tarifa', MercadoPago: 'Mercado Pago', Simulada: 'Simulada',
   confirmacion: 'Confirmación de reserva', cancelacion: 'Cancelación', pago: 'Pago recibido', reclamo_constancia: 'Constancia de reclamo',
-  reclamo_respuesta: 'Respuesta al reclamo', comprobante: 'Comprobante electrónico'
+  reclamo_respuesta: 'Respuesta al reclamo', comprobante: 'Comprobante electrónico', recordatorio: 'Recordatorio de llegada',
+  encuesta: 'Encuesta de satisfacción', devolucion: 'Devolución', Completada: 'Completada', Fallida: 'Fallida', Pasarela: 'Por la pasarela', Manual: 'Manual'
 };

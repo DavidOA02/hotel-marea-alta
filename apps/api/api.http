@@ -55,3 +55,29 @@ POST {{api}}/pagos-en-linea
 Content-Type: application/json
 
 { "codigo": "MA2600042", "email": "correo-del-titular@correo.com" }
+
+### Nota de crédito (administrador). motivo: 01 anulación, 02 error en el RUC (facturas), 06 devolución total, 09 disminución en el valor (con monto)
+POST {{api}}/gestion/comprobantes/1/nota-credito
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "motivo": "09", "monto": 150, "sustento": "Descuento por falla del aire acondicionado" }
+
+### Devolver dinero de un pago (administrador). reducirTotal = descuento: si hay comprobante, emite la nota de crédito
+POST {{api}}/gestion/pagos/1/devolver
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "monto": 450, "motivo": "Una noche no usada", "reducirTotal": true }
+
+### Correos: resumen para la campana y lista de fallidos
+GET {{api}}/gestion/correos/resumen
+Authorization: Bearer {{token}}
+
+###
+GET {{api}}/gestion/correos?estado=Fallido
+Authorization: Bearer {{token}}
+
+### Resultados de la encuesta de satisfacción (administrador)
+GET {{api}}/gestion/encuestas?desde=2026-01-01&hasta=2026-12-31
+Authorization: Bearer {{token}}
