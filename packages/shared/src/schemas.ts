@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { CANALES, CATEGORIAS_MANTENIMIENTO, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, MOVIMIENTOS_CAJA, PRIORIDADES_MANTENIMIENTO, ROLES, TARIFAS_CAMBIO, TIPOS_DOCUMENTO, TIPOS_LIMPIEZA } from './constantes';
 import { DENOMINACIONES_SOLES, sumarDenominaciones } from './caja';
 import { validarDocumento, validarTelefono } from './documentos';
-import { diasEntre, hoyLima, sumarDias } from './fechas';
+import { diasEntre, esFechaIso, hoyLima, sumarDias } from './fechas';
 
 /* ==========================================================
    Esquemas Zod compartidos.
@@ -14,7 +14,7 @@ import { diasEntre, hoyLima, sumarDias } from './fechas';
 
 const texto = (msg: string, max = 120) => z.string({ error: msg }).trim().min(1, msg).max(max, `Máximo ${max} caracteres.`);
 const opcional = (max: number) => z.string().trim().max(max, `Máximo ${max} caracteres.`).optional().nullable().transform(v => (v ? v : null));
-const fechaIso = (msg: string) => z.string({ error: msg }).regex(/^\d{4}-\d{2}-\d{2}$/, msg);
+const fechaIso = (msg: string) => z.string({ error: msg }).refine(esFechaIso, msg);
 const email = z.email({ error: 'Escribe un correo válido.' }).trim().toLowerCase().max(150);
 
 /* ---------------- Cliente ---------------- */
@@ -241,8 +241,8 @@ export const mantenimientoSchema = z.object({
   if (!d.habitacionId && !d.area) ctx.addIssue({ code: 'custom', message: 'Elige la habitación o escribe el área.', path: ['habitacionId'] });
   if (!d.bloquea) return;
   if (!d.habitacionId) ctx.addIssue({ code: 'custom', message: 'Solo se bloquean habitaciones.', path: ['bloquea'] });
-  if (!d.bloqueoDesde || !/^\d{4}-\d{2}-\d{2}$/.test(d.bloqueoDesde)) ctx.addIssue({ code: 'custom', message: 'Indica desde qué fecha se bloquea.', path: ['bloqueoDesde'] });
-  else if (!d.bloqueoHasta || !/^\d{4}-\d{2}-\d{2}$/.test(d.bloqueoHasta)) ctx.addIssue({ code: 'custom', message: 'Indica hasta qué fecha (la habitación vuelve a venderse ese día).', path: ['bloqueoHasta'] });
+  if (!esFechaIso(d.bloqueoDesde)) ctx.addIssue({ code: 'custom', message: 'Indica desde qué fecha se bloquea.', path: ['bloqueoDesde'] });
+  else if (!esFechaIso(d.bloqueoHasta)) ctx.addIssue({ code: 'custom', message: 'Indica hasta qué fecha (la habitación vuelve a venderse ese día).', path: ['bloqueoHasta'] });
   else if (d.bloqueoHasta <= d.bloqueoDesde) ctx.addIssue({ code: 'custom', message: 'El fin del bloqueo debe ser posterior al inicio.', path: ['bloqueoHasta'] });
   else if (diasEntre(d.bloqueoDesde, d.bloqueoHasta) > 180) ctx.addIssue({ code: 'custom', message: 'Para más de 180 días marca la habitación «Fuera de servicio».', path: ['bloqueoHasta'] });
 });

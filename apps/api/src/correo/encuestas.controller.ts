@@ -3,6 +3,7 @@ import { dividir, encuestaSchema, hoyLima, sumarDias } from '@marea/shared';
 import { z } from 'zod';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { Limite } from '../comun/limite.guard';
 import { ZodPipe } from '../comun/zod.pipe';
 import { Roles, SesionGuard } from '../auth/guards';
@@ -46,7 +47,7 @@ export class EncuestasController {
   /** Resultados del periodo: calificación promedio, NPS (promotores 9–10 menos detractores 0–6) y comentarios. */
   @Get('gestion/encuestas') @UseGuards(SesionGuard) @Roles('Administrador')
   async resultados(@Query('desde') desde?: string, @Query('hasta') hasta?: string) {
-    const h = hasta || hoyLima(), d = desde || sumarDias(h, -89);
+    const h = fechaFiltro(hasta, 'hasta') || hoyLima(), d = fechaFiltro(desde, 'desde') || sumarDias(h, -89);
     if (h < d) throw falla(400, 'La fecha final debe ser posterior a la inicial.', 'hasta');
     const filas = await this.db.query<any>(`SELECT e.fecha_envio, e.fecha_respuesta, e.calificacion, e.recomendacion, e.comentario, r.codigo, c.nombres || ' ' || c.apellidos AS cliente
       FROM encuestas e JOIN reservas r ON r.id = e.reserva_id JOIN clientes c ON c.id = r.cliente_id

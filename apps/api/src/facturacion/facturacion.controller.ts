@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseG
 import { anularComprobanteSchema, comprobanteSchema, notaCreditoSchema, notaDebitoSchema } from '@marea/shared';
 import { z } from 'zod';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { ZodPipe } from '../comun/zod.pipe';
 import { UsuarioSesion } from '../auth/auth.service';
 import { Roles, SesionGuard, Usuario } from '../auth/guards';
@@ -25,7 +26,7 @@ export class FacturacionController {
 
   @Get('comprobantes')
   listar(@Query('desde') desde?: string, @Query('hasta') hasta?: string, @Query('estado') estado?: string) {
-    return this.facturacion.listar(desde, hasta, estado);
+    return this.facturacion.listar(fechaFiltro(desde, 'desde'), fechaFiltro(hasta, 'hasta'), estado);
   }
 
   @Get('comprobantes/:id')

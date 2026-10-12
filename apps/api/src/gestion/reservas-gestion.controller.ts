@@ -3,6 +3,7 @@ import { cambioHabitacionSchema, ETIQUETAS, hoyLima, pagoSchema, redondear, rese
 import { z } from 'zod';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { ZodPipe } from '../comun/zod.pipe';
 import { UsuarioSesion } from '../auth/auth.service';
 import { SesionGuard, Usuario } from '../auth/guards';
@@ -25,6 +26,7 @@ export class ReservasGestionController {
   @Get('reservas')
   listar(@Query('estado') estado?: string, @Query('desde') desde?: string, @Query('hasta') hasta?: string,
          @Query('buscar') buscar?: string, @Query('limite') limite = '300') {
+    desde = fechaFiltro(desde, 'desde'); hasta = fechaFiltro(hasta, 'hasta');
     const w: string[] = []; const p: unknown[] = [];
     if (estado) { p.push(estado); w.push(`r.estado = $${p.length}`); }
     if (desde) { p.push(desde); w.push(`r.fecha_entrada >= $${p.length}`); }
@@ -93,6 +95,11 @@ export class ReservasGestionController {
       if (r.estado !== 'Confirmada') throw falla(409, `La reserva está «${r.estado}»; solo se hace check-in a reservas confirmadas.`);
       if (r.fechaEntrada > hoy) throw falla(409, `La llegada está programada para el ${dmy(r.fechaEntrada)}.`);
       if (r.fechaSalida <= hoy) throw falla(409, 'La fecha de salida ya pasó; marca la reserva como No show.');
+      // Un huésped que debía salir y sigue registrado en la habitación: no se aloja a otro encima
+      const ocupante = await this.db.uno<{ codigo: string; fechaSalida: string }>(`SELECT codigo, fecha_salida FROM reservas
+        WHERE habitacion_id = $1 AND estado = 'CheckIn' AND id <> $2 LIMIT 1`, [r.habitacionId, r.id], c);
+      if (ocupante) throw falla(409, `La habitación ${r.habitacion} sigue ocupada por la reserva ${ocupante.codigo} (salida prevista el ${dmy(ocupante.fechaSalida)}). `
+        + 'Registra primero su check-out o cambia esta reserva de habitación.');
       await c.query(`UPDATE reservas SET estado = 'CheckIn', fecha_check_in = now() WHERE id = $1`, [r.id]);
       await this.bitacora.registrar({ accion: 'reserva.checkin', entidad: 'reserva', entidadId: r.codigo, descripcion: `Check-in en la habitación ${r.habitacion}` }, c);
       return { codigo: r.codigo, estado: 'CheckIn', mensaje: `Check-in registrado: habitación ${r.habitacion}.`,

@@ -73,8 +73,10 @@ export class ReservasService {
     // Las reservas del mismo tipo de habitación hacen fila (milisegundos) para elegir habitación sin carreras ni deadlocks.
     // Tipos distintos siguen en paralelo. La restricción EXCLUDE de la tabla es la red de seguridad final.
     await c.query('SELECT pg_advisory_xact_lock(7731, $1)', [tipo.id]);
+    // Con check-in inmediato, además, nadie debe seguir registrado en la habitación (huésped que salía hoy sin check-out)
     const libre = await this.db.uno<{ id: number; numero: string }>(
-      SQL_LIBRES + (s.habitacionId ? ' AND h.id = $4' : '') + ' ORDER BY h.piso, h.numero LIMIT 1',
+      SQL_LIBRES + (s.checkInInmediato ? ` AND NOT EXISTS (SELECT 1 FROM reservas o WHERE o.habitacion_id = h.id AND o.estado = 'CheckIn')` : '')
+        + (s.habitacionId ? ' AND h.id = $4' : '') + ' ORDER BY h.piso, h.numero LIMIT 1',
       s.habitacionId ? [tipo.id, s.fechaEntrada, s.fechaSalida, s.habitacionId] : [tipo.id, s.fechaEntrada, s.fechaSalida], c);
     if (!libre) throw s.habitacionId
       ? falla(409, 'Esa habitación no está libre para esas fechas o no corresponde al tipo elegido.', 'habitacionId')

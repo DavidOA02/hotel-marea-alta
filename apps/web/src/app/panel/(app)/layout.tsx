@@ -65,7 +65,7 @@ export default function LayoutPanel({ children }: { children: React.ReactNode })
         <button className="grid size-10 place-items-center rounded-lg border border-line lg:hidden" onClick={() => setMenu(true)} aria-label="Abrir menú"><Menu className="size-5" /></button>
         <Buscador />
         <TurnoChip />
-        <span className="hidden text-sm capitalize text-muted xl:block">{new Date().toLocaleString('es-PE', { timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long' })}</span>
+        <span className="hidden text-sm text-muted first-letter:uppercase xl:block">{new Date().toLocaleString('es-PE', { timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long' })}</span>
         <button className="grid size-10 place-items-center rounded-lg border border-line bg-white hover:bg-sand" onClick={() => setGuia(true)} aria-label="Guía rápida" title="Guía rápida"><HelpCircle className="size-5" /></button>
         <Alertas />
         <MenuUsuario nombre={usuario.nombre} rol={usuario.rol} salir={() => salir()} />

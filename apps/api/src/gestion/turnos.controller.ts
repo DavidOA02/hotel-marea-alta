@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseG
 import { abrirTurnoSchema, cerrarTurnoSchema, hoyLima, movimientoCajaSchema, revisarTurnoSchema } from '@marea/shared';
 import { z } from 'zod';
 import { ZodPipe } from '../comun/zod.pipe';
+import { fechaFiltro } from '../comun/filtros';
 import { UsuarioSesion } from '../auth/auth.service';
 import { Roles, SesionGuard, Usuario } from '../auth/guards';
 import { TurnosCaja } from '../pagos/turnos.service';
@@ -19,8 +20,8 @@ export class TurnosController {
 
   @Get()
   listar(@Usuario() u: UsuarioSesion, @Query('desde') desde?: string, @Query('hasta') hasta?: string) {
-    const d = desde || hoyLima();
-    return this.turnos.listar(u, d, hasta || d);
+    const d = fechaFiltro(desde, 'desde') || hoyLima();
+    return this.turnos.listar(u, d, fechaFiltro(hasta, 'hasta') || d);
   }
 
   @Get(':id')

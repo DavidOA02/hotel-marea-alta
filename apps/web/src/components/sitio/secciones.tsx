@@ -229,7 +229,7 @@ export function Pie() {
         <Boletin />
       </div>
       <div className="contenedor flex flex-wrap justify-between gap-3 border-t border-white/10 py-6 text-sm text-[#A9BCC0]">
-        <span>© {new Date().getFullYear()} {HOTEL.razon}. Proyecto de práctica con datos ficticios. Fotos referenciales.</span>
+        <span>© {new Date().getFullYear()} {HOTEL.razon.replace(/\.?$/, '.')} Proyecto de práctica con datos ficticios. Fotos referenciales.</span>
         <a href="#" className="hover:text-white">Volver arriba ↑</a>
       </div>
     </footer>

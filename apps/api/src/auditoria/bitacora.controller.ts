@@ -2,9 +2,8 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { hoyLima, sumarDias } from '@marea/shared';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { Roles, SesionGuard } from '../auth/guards';
-
-const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Consulta de la bitácora de auditoría (solo administrador). Fechas en hora de Lima. */
 @Controller('gestion/bitacora')
@@ -17,8 +16,7 @@ export class BitacoraController {
   async listar(@Query('desde') desde?: string, @Query('hasta') hasta?: string, @Query('usuarioId') usuarioId?: string,
                @Query('entidad') entidad?: string, @Query('buscar') buscar?: string, @Query('limite') limite = '500') {
     const hoy = hoyLima();
-    const d = desde || sumarDias(hoy, -6), h = hasta || hoy;
-    if (!FECHA.test(d) || !FECHA.test(h)) throw falla(400, 'Fecha no válida.', 'desde');
+    const d = fechaFiltro(desde, 'desde') || sumarDias(hoy, -6), h = fechaFiltro(hasta, 'hasta') || hoy;
     if (h < d) throw falla(400, 'La fecha final debe ser posterior a la inicial.', 'hasta');
     const p: unknown[] = [d, sumarDias(h, 1)];
     const w = [`(b.fecha AT TIME ZONE 'America/Lima') >= $1::date`, `(b.fecha AT TIME ZONE 'America/Lima') < $2::date`];

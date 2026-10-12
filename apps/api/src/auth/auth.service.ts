@@ -28,7 +28,7 @@ export class AuthService {
   readonly secretoRenovacion = process.env.JWT_SECRETO_RENOVACION || 'marea-alta-solo-desarrollo-renovacion';
 
   constructor(private readonly db: Db, private readonly jwt: JwtService, private readonly bitacora: Bitacora) {
-    if (!process.env.JWT_SECRETO && process.env.NODE_ENV === 'production')
+    if ((!process.env.JWT_SECRETO || !process.env.JWT_SECRETO_RENOVACION) && process.env.NODE_ENV === 'production')
       throw new Error('Define JWT_SECRETO y JWT_SECRETO_RENOVACION en producción.');
   }
 

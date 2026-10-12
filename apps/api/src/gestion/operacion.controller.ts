@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query,
 import { asignarLimpiezaSchema, cancelarMantenimientoSchema, hoyLima, mantenimientoSchema, resolverMantenimientoSchema, sumarDias, tareaLimpiezaSchema, terminarLimpiezaSchema } from '@marea/shared';
 import { z } from 'zod';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { ZodPipe } from '../comun/zod.pipe';
 import { UsuarioSesion } from '../auth/auth.service';
 import { SesionGuard, Usuario } from '../auth/guards';
@@ -58,7 +59,7 @@ export class MantenimientoController {
 
   @Get()
   listar(@Query('vista') vista = 'abiertas', @Query('desde') desde?: string, @Query('hasta') hasta?: string) {
-    const h = hasta || hoyLima(), d = desde || sumarDias(h, -29);
+    const h = fechaFiltro(hasta, 'hasta') || hoyLima(), d = fechaFiltro(desde, 'desde') || sumarDias(h, -29);
     if (h < d) throw falla(400, 'La fecha final debe ser posterior a la inicial.', 'hasta');
     return this.mantenimiento.listar(vista, d, h);
   }

@@ -2,7 +2,7 @@ import { cotizar, redondear, validarDocumento, validarTelefono, sumarDiasHabiles
   reservaWebSchema, reservaPanelSchema, pagoSchema, usuarioSchema, cambiarClaveSchema, reclamacionSchema, primerError, hoyLima, sumarDias,
   recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema, notaCreditoSchema, devolucionSchema, encuestaSchema,
   sumarDenominaciones, efectivoEsperado, dolaresADevolver, abrirTurnoSchema, movimientoCajaSchema, cerrarTurnoSchema,
-  mantenimientoSchema, resolverMantenimientoSchema, tareaLimpiezaSchema } from './index';
+  mantenimientoSchema, resolverMantenimientoSchema, tareaLimpiezaSchema, esFechaIso } from './index';
 
 describe('Tarifas e IGV', () => {
   it('incluye IGV para residentes', () => {
@@ -56,6 +56,14 @@ describe('Fechas', () => {
   });
   it('días entre fechas', () => expect(diasEntre('2026-12-30', '2027-01-02')).toBe(3));
   it('horas para la llegada (15:00 Lima)', () => expect(horasParaLlegada('2026-10-10', new Date('2026-10-07T20:00:00Z'))).toBe(72));
+  it('solo acepta fechas que existen en el calendario', () => {
+    expect(['2026-02-28', '2028-02-29', '2026-12-31'].map(esFechaIso)).toEqual([true, true, true]);
+    expect(['2026-02-29', '2026-02-30', '2026-04-31', '2026-13-01', '2026-00-10', '2026-1-01', 'abc', '', null, 20260101].map(esFechaIso)).toEqual(Array(10).fill(false));
+    const hoy = hoyLima(), anio = Number(hoy.slice(0, 4)) + 1;
+    const r = reservaPanelSchema.safeParse({ clienteId: 1, tipoHabitacion: 'duna', fechaEntrada: `${anio}-02-30`, fechaSalida: `${anio}-03-02`, huespedes: 1, residencia: 'PE', canal: 'Telefono' });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(primerError(r.error).campo).toBe('fechaEntrada');
+  });
 });
 
 describe('Métricas hoteleras', () => {
