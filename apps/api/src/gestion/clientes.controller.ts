@@ -48,6 +48,7 @@ export class ClientesController {
     return this.db.transaccion(async tx => {
       const c = await this.db.uno<any>(`INSERT INTO clientes (nombres, apellidos, tipo_documento, numero_documento, email, codigo_pais, telefono, residencia, acepta_publicidad, notas)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, [d.nombres, d.apellidos, d.tipoDocumento, d.numeroDocumento, d.email, d.codigoPais, d.telefono, d.residencia, d.aceptaPublicidad, d.notas], tx);
+      await tx.query('UPDATE clientes SET idioma = $2 WHERE id = $1', [c.id, d.idioma ?? null]);
       await this.bitacora.registrar({ accion: 'cliente.crear', entidad: 'cliente', entidadId: c.id, descripcion: `Cliente ${d.nombres} ${d.apellidos} (${d.tipoDocumento} ${d.numeroDocumento}) registrado` }, tx);
       return { id: c.id, mensaje: 'Cliente registrado.' };
     });
@@ -61,7 +62,8 @@ export class ClientesController {
       if (!antes) throw falla(404, 'Cliente no encontrado.');
       await tx.query(`UPDATE clientes SET nombres=$2, apellidos=$3, tipo_documento=$4, numero_documento=$5, email=$6, codigo_pais=$7, telefono=$8, residencia=$9, acepta_publicidad=$10, notas=$11
         WHERE id = $1`, [id, d.nombres, d.apellidos, d.tipoDocumento, d.numeroDocumento, d.email, d.codigoPais, d.telefono, d.residencia, d.aceptaPublicidad, d.notas]);
-      const dif = cambios(antes, d, ['nombres', 'apellidos', 'tipoDocumento', 'numeroDocumento', 'email', 'codigoPais', 'telefono', 'residencia', 'aceptaPublicidad', 'notas']);
+      await tx.query('UPDATE clientes SET idioma = $2 WHERE id = $1', [id, d.idioma ?? null]);
+      const dif = cambios(antes, d, ['nombres', 'apellidos', 'tipoDocumento', 'numeroDocumento', 'email', 'codigoPais', 'telefono', 'residencia', 'aceptaPublicidad', 'notas', 'idioma']);
       if (Object.keys(dif).length) await this.bitacora.registrar({ accion: 'cliente.editar', entidad: 'cliente', entidadId: id,
         descripcion: `Datos de ${d.nombres} ${d.apellidos} actualizados: ${Object.keys(dif).join(', ')}`, datos: dif }, tx);
       return { id, mensaje: 'Datos del cliente actualizados.' };

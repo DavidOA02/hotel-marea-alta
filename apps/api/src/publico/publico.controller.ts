@@ -70,6 +70,8 @@ export class PublicoController {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
         [numero, anio, n, d.tipo, d.nombreCompleto, d.tipoDocumento, d.numeroDocumento, d.domicilio, d.telefono, d.email, d.esMenor,
           d.esMenor ? d.apoderado : null, d.bienTipo, d.montoReclamado, d.codigoReserva?.toUpperCase() ?? null, d.descripcionBien, d.detalle, d.pedido, limite], c);
+      await c.query('UPDATE reclamaciones SET idioma = $2 WHERE id = $1', [ins.id,d.idioma]);
+      ins.idioma = d.idioma;
       // Constancia al correo del consumidor (Reglamento del Libro de Reclamaciones) y registro en la bitácora, en la misma transacción
       await this.correos.encolar({ tipo: 'reclamo_constancia', para: ins.email, reclamacionId: ins.id, ...constanciaReclamo(ins) }, c);
       await this.bitacora.registrar({ accion: 'reclamo.registrar', entidad: 'reclamo', entidadId: numero,

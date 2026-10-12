@@ -6,7 +6,10 @@ import { AppModule } from '../src/app.module';
 import { Correos } from '../src/correo/correos.service';
 import { Db } from '../src/db/db.service';
 import { PagosEnLinea } from '../src/pagos-en-linea/pagos-en-linea.service';
-import { Simulada } from '../src/pagos-en-linea/pasarelas';
+import { Niubiz, Simulada } from '../src/pagos-en-linea/pasarelas';
+import { Simulado as OseSimulado } from '../src/facturacion/proveedores';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CorreosProgramados } from '../src/correo/programados.service';
 
 process.env.PGDATABASE = 'hotel_marea_alta_test';
@@ -426,6 +429,114 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
   const boleta = async (codigo: string) => (await http.post(`/api/gestion/reservas/${codigo}/comprobante`).set(R()).send({ tipo: 'Boleta' }).expect(201)).body;
   const nota = (id: number, d: object) => http.post(`/api/gestion/comprobantes/${id}/nota-credito`).set(A()).send(d);
   const pagoDe = async (codigo: string) => (await ficha(codigo)).pagos.find((p: any) => p.estado === 'Aprobado');
+
+  describe('Consumos, notas de débito e idiomas',()=>{
+    const consumo=(codigo:string,extra:object={})=>http.post(`/api/gestion/reservas/${codigo}/consumos`).set(R()).send({categoria:'Restaurante',descripcion:'Cena del huésped',cantidad:2,precioUnitario:29.5,...extra});
+    it('la migración se repite sin perder datos',async()=>{
+      const [antes]=await db().query<any>('SELECT count(*) AS n FROM reservas');
+      await db().transaccion(c => c.query(fs.readFileSync(path.resolve(__dirname,'../../../database/03_mejoras.sql'),'utf8')));
+      expect((await db().query<any>('SELECT count(*) AS n FROM reservas'))[0].n).toBe(antes.n);
+    });
+    it('los consumos se suman al saldo, aparecen como líneas y quedan protegidos después de emitir',async()=>{
+      const r=await reservaPanel({tipoHabitacion:'duna',fechaEntrada:d(240),fechaSalida:d(242)});
+      const a=(await consumo(r.codigo).expect(201)).body;
+      expect(a).toMatchObject({total:59,subtotal:50,igv:9});
+      expect((await ficha(r.codigo)).reserva).toMatchObject({total:959,saldo:959});
+      await consumo(r.codigo,{cantidad:0}).expect(400);
+      await pagarTodo(r.codigo);
+      const b=await boleta(r.codigo);
+      expect(b.items).toHaveLength(2);
+      expect(b.items[1]).toMatchObject({cantidad:2,precioUnitario:29.5,valorUnitario:25,total:59,igv:9});
+      await http.post(`/api/gestion/reservas/${r.codigo}/consumos/${a.id}/anular`).set(A()).send({motivo:'Consumo erróneo'}).expect(409);
+      await consumo(r.codigo).expect(403);
+      const cargo=(await http.post(`/api/gestion/reservas/${r.codigo}/consumos`).set(A()).send({categoria:'Minibar',descripcion:'Agua y bebidas',cantidad:1,precioUnitario:11.8}).expect(201)).body;
+      expect(cargo.notaDebito).toMatchObject({tipo:'08',estado:'Aceptado',total:11.8,gravada:10,igv:1.8});
+      expect((await ficha(r.codigo)).reserva).toMatchObject({total:970.8,pagado:959,saldo:11.8});
+      expect((await ficha(r.codigo)).comprobantes.filter((k:any)=>['01','03'].includes(k.tipo))).toHaveLength(1);
+    });
+    it('anulación de consumos sin comprobante y cargos concurrentes conservan el saldo',async()=>{
+      const r=await reservaPanel({tipoHabitacion:'duna',fechaEntrada:d(244),fechaSalida:d(245)});
+      const cargos=await Promise.all([consumo(r.codigo).expect(201),consumo(r.codigo).expect(201)]);
+      expect((await ficha(r.codigo)).reserva.total).toBe(568);
+      await http.post(`/api/gestion/reservas/${r.codigo}/consumos/${cargos[0].body.id}/anular`).set(R()).send({motivo:'Cena duplicada'}).expect(403);
+      await http.post(`/api/gestion/reservas/${r.codigo}/consumos/${cargos[0].body.id}/anular`).set(A()).send({motivo:'Cena duplicada'}).expect(201);
+      expect((await ficha(r.codigo)).reserva.total).toBe(509);
+    });
+    it('hospedaje exportado con consumo gravado conserva ambas bases y encola correos en inglés',async()=>{
+      const r=(await http.post('/api/reservas').send(huesped(900,{tipoHabitacion:'duna',fechaEntrada:d(247),fechaSalida:d(248),residencia:'EXT',tipoDocumento:'PAS',numeroDocumento:'US9000123',codigoPais:'1',telefono:'2025550123'})).expect(201)).body;
+      await consumo(r.codigo).expect(201);await pagarTodo(r.codigo);
+      const b=await boleta(r.codigo);
+      expect(b).toMatchObject({tipo:'01',exportacion:381.36,gravada:50,igv:9,total:440.36});
+      expect(b.items.map((i:any)=>i.afectacion)).toEqual(['40','10']);
+      const [correo]=await db().query<any>(`SELECT html,asunto FROM correos WHERE reserva_id=$1 AND tipo='comprobante'`,[b.reservaId]);
+      expect(correo.html).toContain('lang="en"');expect(correo.asunto).toContain('Electronic invoice');
+    });
+    it('nota de débito: roles, rechazo con reversión y notas sumadas en ventas',async()=>{
+      const r=await reservaPagada({tipoHabitacion:'duna',fechaEntrada:d(250),fechaSalida:d(251)}), b=await boleta(r.codigo);
+      const ruta=`/api/gestion/comprobantes/${b.id}/nota-debito`, body={motivo:'03',monto:59,sustento:'Penalidad por daños'};
+      await http.post(ruta).set(R()).send(body).expect(403);
+      await http.post(ruta).set(A()).send({...body,monto:-1}).expect(400);
+      const spy=jest.spyOn(OseSimulado,'emitir').mockResolvedValueOnce({estado:'Rechazado',mensaje:'Rechazo de prueba'});
+      try{expect((await http.post(ruta).set(A()).send(body).expect(201)).body.estado).toBe('Rechazado');}finally{spy.mockRestore();}
+      expect((await ficha(r.codigo)).reserva.total).toBe(450);
+      const nota=(await http.post(ruta).set(A()).send(body).expect(201)).body;
+      expect(nota).toMatchObject({tipo:'08',serie:'BD01',refSerie:'B001',estado:'Aceptado'});
+      expect((await ficha(r.codigo)).reserva.saldo).toBe(59);
+      await http.post(`/api/gestion/comprobantes/${nota.id}/nota-debito`).set(A()).send(body).expect(409);
+      await http.post(`/api/gestion/comprobantes/${b.id}/anular`).set(A()).send({motivo:'Prueba de baja'}).expect(409);
+      const listado=(await http.get(`/api/gestion/comprobantes?desde=${hoy}&hasta=${hoy}`).set(A())).body;
+      const esperado=listado.comprobantes.filter((k:any)=>['Aceptado','Observado'].includes(k.estado)).reduce((s:number,k:any)=>s+(k.tipo==='07'?-k.total:k.total),0);
+      expect(listado.totales.total).toBe(Math.round(esperado*100)/100);expect(listado.totales.debitos).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Devoluciones Niubiz sin duplicados',()=>{
+    it('permite reintentar cuando falla el token sin enviar la solicitud de devolución',async()=>{
+      const r=await reservaPagada({tipoHabitacion:'duna',fechaEntrada:d(262),fechaSalida:d(263)}), pago=await pagoDe(r.codigo);
+      await db().query(`UPDATE pagos SET pasarela='Niubiz', referencia='993203570048590' WHERE id=$1`,[pago.id]);
+      const fetchNiubiz=jest.spyOn(global,'fetch')
+        .mockResolvedValueOnce(new Response('Unauthorized',{status:401}))
+        .mockResolvedValueOnce(new Response('tok',{status:201}))
+        .mockResolvedValueOnce(new Response(JSON.stringify({data:{CODERROR:'100',CODIGODEVOLUCION:'517824'}}),{status:200}));
+      try{
+        const dev=(await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({monto:59,motivo:'Devolución de prueba'}).expect(200)).body;
+        expect(dev).toMatchObject({estado:'Pendiente',solicitudEnviada:false,referenciaExterna:null});
+        expect(fetchNiubiz).toHaveBeenCalledTimes(1);expect((await ficha(r.codigo)).reserva.pagado).toBe(450);
+        const reintento=(await http.post(`/api/gestion/pagos/devoluciones/${dev.id}/reintentar`).set(A()).send({}).expect(200)).body;
+        expect(reintento).toMatchObject({estado:'Pendiente',solicitudEnviada:true,referenciaExterna:'517824'});
+        expect(fetchNiubiz).toHaveBeenCalledTimes(3);
+        expect(fetchNiubiz.mock.calls.filter(([url])=>String(url).includes('/api.refund/v1/refund/'))).toHaveLength(1);
+      }finally{fetchNiubiz.mockRestore();}
+    });
+    it('registra pendiente, consulta el resultado y un reintento no solicita otra devolución',async()=>{
+      const r=await reservaPagada({tipoHabitacion:'duna',fechaEntrada:d(255),fechaSalida:d(256)}), pago=await pagoDe(r.codigo);
+      await db().query(`UPDATE pagos SET pasarela='Niubiz', referencia='993203570048588' WHERE id=$1`,[pago.id]);
+      const registrar=jest.spyOn(Niubiz,'devolver').mockResolvedValue({estado:'Pendiente',referencia:'517822',mensaje:'Registrada',respuesta:{}});
+      const consultar=jest.spyOn(Niubiz,'consultarDevolucion').mockResolvedValue({estado:'Completada',referencia:'517822',mensaje:'Exitoso',respuesta:{transaccion:'993203570048588',monto:59}});
+      try{
+        const dev=(await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({monto:59,motivo:'Devolución de prueba'}).expect(200)).body;
+        expect(dev).toMatchObject({medio:'Pasarela',estado:'Pendiente'});expect((await ficha(r.codigo)).reserva.pagado).toBe(450);
+        await http.post(`/api/gestion/pagos/devoluciones/${dev.id}/reintentar`).set(A()).send({}).expect(200);
+        expect((await ficha(r.codigo)).reserva.pagado).toBe(391);expect(registrar).toHaveBeenCalledTimes(1);expect(consultar).toHaveBeenCalledTimes(1);
+      }finally{registrar.mockRestore();consultar.mockRestore();}
+    });
+    it('respuesta perdida: nunca repite POST y concilia solo una transacción y monto coincidentes',async()=>{
+      const r=await reservaPagada({tipoHabitacion:'duna',fechaEntrada:d(258),fechaSalida:d(259)}), pago=await pagoDe(r.codigo);
+      await db().query(`UPDATE pagos SET pasarela='Niubiz', referencia='993203570048589' WHERE id=$1`,[pago.id]);
+      const registrar=jest.spyOn(Niubiz,'devolver').mockRejectedValue(new Error('Respuesta perdida'));
+      const consultar=jest.spyOn(Niubiz,'consultarDevolucion').mockResolvedValue({estado:'Completada',referencia:'517823',mensaje:'Exitoso',respuesta:{transaccion:'otra',monto:59}});
+      try{
+        const dev=(await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({monto:59,motivo:'Devolución de prueba'}).expect(200)).body;
+        await Promise.all([http.post(`/api/gestion/pagos/devoluciones/${dev.id}/reintentar`).set(A()).send({}).expect(200),http.post(`/api/gestion/pagos/devoluciones/${dev.id}/reintentar`).set(A()).send({}).expect(200)]);
+        expect(registrar).toHaveBeenCalledTimes(1);
+        const ruta=`/api/gestion/pagos/devoluciones/${dev.id}/conciliar-niubiz`;
+        await http.post(ruta).set(A()).send({codigo:'517823'}).expect(409);
+        consultar.mockResolvedValue({estado:'Completada',referencia:'517823',mensaje:'Exitoso',respuesta:{transaccion:'993203570048589',monto:59}});
+        await http.post(ruta).set(A()).send({codigo:'517823'}).expect(200);
+        expect((await ficha(r.codigo)).reserva.pagado).toBe(391);
+      }finally{registrar.mockRestore();consultar.mockRestore();}
+    });
+  });
 
   describe('Notas de crédito', () => {
     it('parcial (09) rebaja la reserva; la total (01) neutraliza el comprobante y permite emitir otro', async () => {

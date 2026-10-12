@@ -9,6 +9,11 @@ const exportacion: DocumentoElectronico = { ...boleta, tipo: '01', serie: 'F001'
   gravada: 0, exportacion: 762.71, igv: 0, total: 762.71, items: [{ ...boleta.items[0], valorUnitario: 762.71, precioUnitario: 762.71, afectacion: '40', igv: 0, total: 762.71 }] };
 
 describe('Nubefact (OSE/PSE)', () => {
+  it('nota de débito: tipo 4 y motivo de débito, sin campo de crédito', () => {
+    const trama = cuerpoNubefact({ ...boleta, tipo:'08', serie:'BD01', nota:{ tipo:'03', serie:'B001', numero:7, motivo:'03', sustento:'Penalidad por daños' } });
+    expect(trama).toMatchObject({ tipo_de_comprobante:4, tipo_de_nota_de_debito:3, documento_que_se_modifica_tipo:2, documento_que_se_modifica_numero:7 });
+    expect(trama).not.toHaveProperty('tipo_de_nota_de_credito');
+  });
   it('arma la boleta con los códigos de su API', () => {
     expect(cuerpoNubefact(boleta)).toMatchObject({ operacion: 'generar_comprobante', tipo_de_comprobante: 2, serie: 'B001', numero: 7, sunat_transaction: 1,
       cliente_tipo_de_documento: '1', fecha_de_emision: '11-10-2026', moneda: 1, total_gravada: 762.71, total_igv: 137.29, total: 900, codigo_unico: 'B001-7',

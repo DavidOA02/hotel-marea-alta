@@ -14,7 +14,7 @@ export interface ItemComprobante {
   igv: number; total: number;
 }
 export interface DocumentoElectronico {
-  tipo: '01' | '03' | '07'; serie: string; numero: number; fechaEmision: string; tipoOperacion: string;
+  tipo: '01' | '03' | '07' | '08'; serie: string; numero: number; fechaEmision: string; tipoOperacion: string;
   clienteTipoDoc: string; clienteNumDoc: string; clienteNombre: string; clienteDireccion: string | null; clienteEmail: string | null;
   gravada: number; exportacion: number; igv: number; total: number; items: ItemComprobante[];
   /** Solo notas de crédito: comprobante que modifica y motivo (catálogo 09). */
@@ -35,7 +35,7 @@ export interface ProveedorFacturacion {
   anular(d: DocumentoElectronico, motivo: string): Promise<{ mensaje: string; respuesta?: unknown }>;
 }
 
-const nombreTipo = (t: string) => ({ '01': 'Factura', '03': 'Boleta', '07': 'Nota de crédito' })[t] ?? t;
+const nombreTipo = (t: string) => ({ '01': 'Factura', '03': 'Boleta', '07': 'Nota de crédito', '08': 'Nota de débito' })[t] ?? t;
 
 /* ---------------- Simulado ---------------- */
 export const Simulado: ProveedorFacturacion = {
@@ -54,7 +54,7 @@ export const Simulado: ProveedorFacturacion = {
 /* ---------------- Nubefact ----------------
    Códigos de su API JSON. Revisa estos valores con tu cuenta DEMO de Nubefact antes de producción. */
 const NF = {
-  tipoComprobante: { '01': 1, '03': 2, '07': 3 } as Record<string, number>,   // 3 = nota de crédito
+  tipoComprobante: { '01': 1, '03': 2, '07': 3, '08': 4 } as Record<string, number>,
   operacion: { '0101': 1, '0202': 2 } as Record<string, number>,          // sunat_transaction: 1 venta interna, 2 exportación
   tipoIgv: { '10': 1, '40': 16 } as Record<string, number>,               // tipo_de_igv: 1 gravado oneroso, 16 exportación
   monedaSoles: 1
@@ -88,7 +88,7 @@ export function interpretarNubefact(b: any): ResultadoOse {
 }
 
 export function cuerpoNubefact(d: DocumentoElectronico) {
-  const exportacion = d.tipoOperacion === '0202';
+  const exportacion = d.exportacion > 0;
   return {
     operacion: 'generar_comprobante', tipo_de_comprobante: NF.tipoComprobante[d.tipo], serie: d.serie, numero: d.numero,
     sunat_transaction: NF.operacion[d.tipoOperacion] ?? 1,
@@ -98,9 +98,11 @@ export function cuerpoNubefact(d: DocumentoElectronico) {
     total_gravada: d.gravada || '', total_inafecta: exportacion ? d.exportacion : '', total_igv: d.igv, total: d.total,
     enviar_automaticamente_a_la_sunat: true, enviar_automaticamente_al_cliente: false, codigo_unico: `${d.serie}-${d.numero}`, formato_de_pdf: 'A4',
     ...(d.nota ? { documento_que_se_modifica_tipo: NF.tipoComprobante[d.nota.tipo], documento_que_se_modifica_serie: d.nota.serie,
-      documento_que_se_modifica_numero: d.nota.numero, tipo_de_nota_de_credito: Number(d.nota.motivo), observaciones: d.nota.sustento } : {}),
+      documento_que_se_modifica_numero: d.nota.numero,
+      ...(d.tipo === '08' ? { tipo_de_nota_de_debito: Number(d.nota.motivo) } : { tipo_de_nota_de_credito: Number(d.nota.motivo) }),
+      observaciones: d.nota.sustento } : {}),
     items: d.items.map(i => ({ unidad_de_medida: i.unidad, codigo: i.codigo, descripcion: i.descripcion, cantidad: i.cantidad,
-      valor_unitario: i.valorUnitario, precio_unitario: i.precioUnitario, subtotal: i.valorUnitario * i.cantidad,
+      valor_unitario: i.valorUnitario, precio_unitario: i.precioUnitario, subtotal: Math.round(i.valorUnitario * i.cantidad * 100) / 100,
       tipo_de_igv: NF.tipoIgv[i.afectacion], igv: i.igv, total: i.total }))
   };
 }

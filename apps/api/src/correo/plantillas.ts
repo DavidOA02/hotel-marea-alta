@@ -1,5 +1,6 @@
 import { urlWeb } from '../config/env';
 import { HOTEL } from '../config/hotel';
+import * as ingles from './plantillas-en';
 
 /* ==========================================================
    Plantillas de correo (HTML con estilos en línea + texto plano).
@@ -22,16 +23,16 @@ export function fechaLarga(iso: string | Date | null | undefined) {
 }
 const primerNombre = (n: string) => String(n || '').trim().split(/\s+/)[0] || '';
 
-function tabla(filas: [string, string][]) {
+export function tabla(filas: [string, string][]) {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:16px 0">${filas.map(([k, v]) =>
     `<tr><td style="padding:8px 0;border-bottom:1px solid ${LINEA};color:${GRIS};width:42%">${esc(k)}</td><td style="padding:8px 0;border-bottom:1px solid ${LINEA}">${esc(v)}</td></tr>`).join('')}</table>`;
 }
-const textoTabla = (filas: [string, string][]) => filas.map(([k, v]) => `${k}: ${v}`).join('\n');
-const boton = (texto: string, url: string) =>
+export const textoTabla = (filas: [string, string][]) => filas.map(([k, v]) => `${k}: ${v}`).join('\n');
+export const boton = (texto: string, url: string) =>
   `<p style="margin:24px 0"><a href="${esc(url)}" style="background:${ORO};color:#fff;text-decoration:none;padding:12px 22px;display:inline-block;letter-spacing:1px;font-size:13px;text-transform:uppercase">${esc(texto)}</a></p>`;
 
-function marco(titulo: string, cuerpo: string) {
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(titulo)}</title></head>
+export function marco(titulo: string, cuerpo: string, idioma = 'es') {
+  return `<!doctype html><html lang="${idioma}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(titulo)}</title></head>
 <body style="margin:0;background:#F6F3EE;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1E2A2E;font-size:15px;line-height:1.55">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-top:6px solid ${OCEANO}">
@@ -42,22 +43,25 @@ function marco(titulo: string, cuerpo: string) {
 ${esc(HOTEL.telefono)} · <a href="https://wa.me/${esc(HOTEL.whatsapp)}" style="color:${OCEANO}">WhatsApp</a> · ${esc(HOTEL.email)}</td></tr>
 </table></td></tr></table></body></html>`;
 }
-const pie = () => `\n\n—\n${HOTEL.razonSocial} · RUC ${HOTEL.ruc}\n${HOTEL.direccion}\n${HOTEL.telefono} · WhatsApp https://wa.me/${HOTEL.whatsapp}`;
+export const pie = () => `\n\n—\n${HOTEL.razonSocial} · RUC ${HOTEL.ruc}\n${HOTEL.direccion}\n${HOTEL.telefono} · WhatsApp https://wa.me/${HOTEL.whatsapp}`;
 
 /** Datos de reserva tal como los devuelve SQL_RESERVA. */
 export interface ReservaCorreo {
   codigo: string; cliente: string; tipoHabitacion: string; habitacion: string; fechaEntrada: string; fechaSalida: string; noches: number;
   huespedes: number; subtotal: number; igv: number; total: number; exoneradoIgv: boolean; pagado: number; saldo: number; horaLlegada?: string | null;
+  idioma?: 'es' | 'en' | null; residencia?: string;
 }
+const enIngles = (r: { idioma?: string | null; residencia?: string }) => r.idioma === 'en' || (!r.idioma && r.residencia === 'EXT');
 const filasReserva = (r: ReservaCorreo): [string, string][] => [
   ['Código de reserva', r.codigo], ['Habitación', `${r.tipoHabitacion} N.° ${r.habitacion}`],
   ['Llegada', `${fechaLarga(r.fechaEntrada)} · desde las 15:00`], ['Salida', `${fechaLarga(r.fechaSalida)} · hasta las 12:00`],
   ['Noches', String(r.noches)], ['Huéspedes', String(r.huespedes)],
-  ['Total', `${soles(r.total)} ${r.exoneradoIgv ? '(exonerado de IGV)' : '(IGV incluido)'}`], ['Pagado', soles(r.pagado)], ['Saldo', soles(r.saldo)]
+  ['Total', `${soles(r.total)} ${r.exoneradoIgv && r.igv <= 0 ? '(exonerado de IGV)' : '(IGV incluido)'}`], ['Pagado', soles(r.pagado)], ['Saldo', soles(r.saldo)]
 ];
 const enlaceReserva = (codigo: string) => `${urlWeb()}/mi-reserva?codigo=${encodeURIComponent(codigo)}`;
 
 export function confirmacionReserva(r: ReservaCorreo, pagoEnLinea: boolean): Mensaje {
+  if (enIngles(r)) return ingles.confirmacion(r, pagoEnLinea);
   const filas = filasReserva(r);
   const pago = r.saldo > 0.009 ? (pagoEnLinea ? 'Puedes pagar al llegar o en línea desde «Mi reserva».' : 'Pagas al llegar.') : 'Tu reserva está pagada.';
   return {
@@ -71,6 +75,7 @@ export function confirmacionReserva(r: ReservaCorreo, pagoEnLinea: boolean): Men
 }
 
 export function cancelacionReserva(r: ReservaCorreo): Mensaje {
+  if (enIngles(r)) return ingles.cancelacion(r);
   const devolucion = r.pagado > 0.009 ? `Registramos pagos por ${soles(r.pagado)}. Te escribiremos para coordinar la devolución.` : 'No se realizó ningún cobro.';
   return {
     asunto: `Reserva ${r.codigo} cancelada · ${HOTEL.nombre}`,
@@ -81,6 +86,7 @@ export function cancelacionReserva(r: ReservaCorreo): Mensaje {
 }
 
 export function pagoRecibido(r: ReservaCorreo, p: { monto: number; pasarela: string; referencia: string | null }): Mensaje {
+  if (enIngles(r)) return ingles.pago(r, p);
   const filas: [string, string][] = [['Reserva', r.codigo], ['Monto', soles(p.monto)], ['Medio', `Pago en línea (${p.pasarela})`], ['Operación', p.referencia ?? '—'], ['Saldo pendiente', soles(r.saldo)]];
   return {
     asunto: `Recibimos tu pago · Reserva ${r.codigo}`,
@@ -90,6 +96,7 @@ export function pagoRecibido(r: ReservaCorreo, p: { monto: number; pasarela: str
 }
 
 export function recordatorioLlegada(r: ReservaCorreo & { residencia?: string }, pagoEnLinea: boolean): Mensaje {
+  if (enIngles(r)) return ingles.recordatorio(r, pagoEnLinea);
   const filas = filasReserva(r).filter(([k]) => !['Pagado', 'Total'].includes(k));
   const pendiente = r.saldo > 0.009 ? `Saldo pendiente: ${soles(r.saldo)}. ${pagoEnLinea ? 'Puedes pagarlo ahora en línea desde «Mi reserva» o al llegar.' : 'Puedes pagarlo al llegar.'}` : 'Tu reserva está pagada.';
   const consejos = [
@@ -107,6 +114,7 @@ export function recordatorioLlegada(r: ReservaCorreo & { residencia?: string }, 
 }
 
 export function encuestaEstadia(r: ReservaCorreo, token: string): Mensaje {
+  if (enIngles(r)) return ingles.encuesta(r, token);
   const enlace = `${urlWeb()}/encuesta?token=${encodeURIComponent(token)}`;
   return {
     asunto: `¿Cómo fue tu estadía en ${HOTEL.nombre}?`,
@@ -117,6 +125,7 @@ export function encuestaEstadia(r: ReservaCorreo, token: string): Mensaje {
 }
 
 export function devolucionRealizada(r: ReservaCorreo, d: { monto: number; medio: string; pasarela: string | null; metodo: string; motivo: string }): Mensaje {
+  if (enIngles(r)) return ingles.devolucion(r, d);
   const como = d.medio === 'Pasarela'
     ? `Devolvimos el importe a tu medio de pago a través de ${d.pasarela === 'MercadoPago' ? 'Mercado Pago' : d.pasarela}. Según tu banco, puede tardar algunos días hábiles en verse en tu estado de cuenta.`
     : `Registramos la devolución por ${d.metodo.toLowerCase()}.`;
@@ -130,6 +139,7 @@ export function devolucionRealizada(r: ReservaCorreo, d: { monto: number; medio:
 
 /** Datos de la hoja tal como están en la tabla reclamaciones. */
 export interface ReclamoCorreo {
+  idioma?: 'es' | 'en' | null;
   numero: string; fecha: string | Date; tipo: string; nombreCompleto: string; tipoDocumento: string; numeroDocumento: string; domicilio: string;
   telefono: string; email: string; esMenor: boolean; apoderado: string | null; bienTipo: string; montoReclamado: number | null; codigoReserva: string | null;
   descripcionBien: string; detalle: string; pedido: string; fechaLimiteRespuesta: string; respuesta?: string | null;
@@ -143,6 +153,7 @@ const filasReclamo = (h: ReclamoCorreo): [string, string][] => [
 const AVISO_INDECOPI = 'La formulación del reclamo no impide acudir a otras vías de solución de controversias ni es requisito previo para interponer una denuncia ante el INDECOPI.';
 
 export function constanciaReclamo(h: ReclamoCorreo): Mensaje {
+  if (enIngles(h)) return ingles.reclamo(h);
   return {
     asunto: `Hoja de reclamación N.° ${h.numero} · Libro de Reclamaciones de ${HOTEL.nombre}`,
     html: marco(`Registramos tu ${h.tipo.toLowerCase()}`, `<p>Esta es la constancia de tu hoja de reclamación. Te responderemos a este correo a más tardar el <strong>${esc(fechaLarga(h.fechaLimiteRespuesta))}</strong>.</p>
@@ -153,6 +164,7 @@ export function constanciaReclamo(h: ReclamoCorreo): Mensaje {
 }
 
 export function respuestaReclamo(h: ReclamoCorreo, respuesta: string): Mensaje {
+  if (enIngles(h)) return ingles.reclamo(h, respuesta);
   return {
     asunto: `Respuesta a tu ${h.tipo.toLowerCase()} N.° ${h.numero} · ${HOTEL.nombre}`,
     html: marco(`Respuesta a tu ${h.tipo.toLowerCase()} N.° ${h.numero}`, `<p>Hola ${esc(primerNombre(h.nombreCompleto))}:</p>
@@ -168,17 +180,21 @@ export interface ComprobanteCorreo {
   enlacePdf: string | null; enlaceXml: string | null; proveedor: string; codigoReserva: string;
   /** Notas de crédito: comprobante que modifica y motivo. */
   modifica?: string | null; motivoNota?: string | null;
+  idioma?: 'es' | 'en' | null;
 }
 export function comprobanteEmitido(c: ComprobanteCorreo): Mensaje {
-  const nombre = ({ '01': 'Factura electrónica', '03': 'Boleta de venta electrónica', '07': 'Nota de crédito electrónica' } as Record<string, string>)[c.tipo] ?? 'Comprobante electrónico';
+  if (enIngles(c)) return ingles.comprobante(c);
+  const nombre = ({ '01': 'Factura electrónica', '03': 'Boleta de venta electrónica', '07': 'Nota de crédito electrónica', '08': 'Nota de débito electrónica' } as Record<string, string>)[c.tipo] ?? 'Comprobante electrónico';
   const filas: [string, string][] = [['Comprobante', `${nombre} ${c.serie}-${c.numero}`], ['Fecha de emisión', fechaLarga(c.fechaEmision)], ['Cliente', c.clienteNombre],
-    ['Reserva', c.codigoReserva], ...(c.modifica ? [['Modifica', c.modifica], ['Motivo', c.motivoNota ?? '']] as [string, string][] : []), ...(c.exportacion > 0 ? [['Exportación de servicios', soles(c.exportacion)]] as [string, string][] : [['Op. gravada', soles(c.gravada)], ['IGV 18 %', soles(c.igv)]] as [string, string][]),
+    ['Reserva', c.codigoReserva], ...(c.modifica ? [['Modifica', c.modifica], ['Motivo', c.motivoNota ?? '']] as [string, string][] : []),
+    ...(c.exportacion > 0 ? [['Exportación de servicios', soles(c.exportacion)]] as [string, string][] : []),
+    ...(c.gravada > 0 || !c.exportacion ? [['Op. gravada', soles(c.gravada)], ['IGV 18 %', soles(c.igv)]] as [string, string][] : []),
     ['Importe total', soles(c.total)]];
   const simulado = c.proveedor === 'Simulado' ? 'Documento de PRUEBA emitido en modo simulado: no tiene validez tributaria.' : '';
   const enlaces = [c.enlacePdf && boton('Descargar PDF', c.enlacePdf), c.enlaceXml && `<p><a href="${esc(c.enlaceXml)}" style="color:${OCEANO}">Descargar XML</a></p>`].filter(Boolean).join('');
   return {
     asunto: `${nombre} ${c.serie}-${c.numero} · ${HOTEL.nombre}`,
-    html: marco(nombre, `<p>${c.modifica ? `Emitimos una nota de crédito que modifica tu ${esc(c.modifica)}.` : 'Adjuntamos los datos de tu comprobante electrónico.'}</p>${tabla(filas)}${enlaces}
+    html: marco(nombre, `<p>${c.modifica ? `Emitimos una nota de ${c.tipo === '08' ? 'débito' : 'crédito'} que modifica tu ${esc(c.modifica)}.` : 'Adjuntamos los datos de tu comprobante electrónico.'}</p>${tabla(filas)}${enlaces}
       <p style="color:${GRIS};font-size:12px">${esc(simulado || 'Puedes verificar su validez en el portal de consulta de comprobantes de SUNAT.')}</p>`),
     texto: `${nombre} ${c.serie}-${c.numero}\n\n${textoTabla(filas)}${c.enlacePdf ? `\nPDF: ${c.enlacePdf}` : ''}${c.enlaceXml ? `\nXML: ${c.enlaceXml}` : ''}\n${simulado}${pie()}`
   };

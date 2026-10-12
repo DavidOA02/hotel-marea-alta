@@ -67,7 +67,7 @@ export class PagosController {
     });
   }
 
-  /** Devuelve dinero de un pago: por la pasarela (Culqi, Mercado Pago) o registrando la devolución hecha en efectivo, transferencia o en el portal de Niubiz. */
+  /** Devuelve por Culqi, Mercado Pago o Niubiz, o registra la devolución manual. */
   @Post(':id/devolver') @HttpCode(200) @Roles('Administrador')
   devolver(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(devolucionSchema)) d: z.output<typeof devolucionSchema>) {
     return this.devoluciones.devolver(id, d, u.nombre);
@@ -76,5 +76,10 @@ export class PagosController {
   @Post('devoluciones/:id/reintentar') @HttpCode(200) @Roles('Administrador')
   reintentarDevolucion(@Param('id', ParseIntPipe) id: number) {
     return this.devoluciones.reintentar(id);
+  }
+
+  @Post('devoluciones/:id/conciliar-niubiz') @HttpCode(200) @Roles('Administrador')
+  conciliarNiubiz(@Param('id', ParseIntPipe) id: number, @Body(new ZodPipe(z.object({ codigo:z.string().trim().regex(/^\d{1,100}$/) }))) d:{ codigo:string }) {
+    return this.devoluciones.conciliarNiubiz(id,d.codigo);
   }
 }

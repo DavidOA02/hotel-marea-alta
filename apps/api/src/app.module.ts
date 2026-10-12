@@ -28,10 +28,11 @@ import { Devoluciones } from './pagos/devoluciones.service';
 import { PagosService } from './pagos/pagos.service';
 import { PublicoController } from './publico/publico.controller';
 import { ReservasService } from './reservas/reservas.service';
+import { ConsumosController } from './gestion/consumos.controller';
 
 const CONTROLADORES = [PublicoController, AuthController, ReservasGestionController, HabitacionesController, ClientesController,
   PagosController, MetricasController, AdminController, BitacoraController, PagosEnLineaController, FacturacionController,
-  CorreosController, EncuestasController];
+  CorreosController, EncuestasController, ConsumosController];
 
 @Module({
   imports: [JwtModule.register({})],

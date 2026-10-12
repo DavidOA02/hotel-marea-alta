@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { desglosar, redondear } from '@marea/shared';
+import { redondear } from '@marea/shared';
 import type { PoolClient } from 'pg';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
@@ -34,12 +34,23 @@ export class PagosService {
    * Sube o baja el total de una reserva (descuento, noches no usadas, nota de crédito parcial) y recalcula
    * valor de venta e IGV. Es el único lugar que cambia el importe de una reserva ya creada fuera del cambio de habitación.
    */
-  async ajustarTotal(c: PoolClient, reservaId: number, delta: number) {
-    const r = (await this.db.uno<{ codigo: string; total: number; noches: number; exoneradoIgv: boolean }>(
-      'SELECT codigo, total, noches, exonerado_igv FROM reservas WHERE id = $1 FOR UPDATE', [reservaId], c))!;
+  async ajustarTotal(c: PoolClient, reservaId: number, delta: number, deltaIgv?: number) {
+    const r = (await this.db.uno<{ codigo: string; total: number; igv: number; noches: number; exoneradoIgv: boolean }>(
+      'SELECT codigo, total, igv, noches, exonerado_igv FROM reservas WHERE id = $1 FOR UPDATE', [reservaId], c))!;
     const nuevo = redondear(r.total + delta);
     if (nuevo < 0) throw falla(409, `El descuento (S/ ${(-delta).toFixed(2)}) supera el total de la reserva (S/ ${r.total.toFixed(2)}).`, 'monto');
-    const q = desglosar(nuevo, r.noches, r.exoneradoIgv);
+    // Descuentos sin comprobante afectan al hospedaje, conservando los consumos gravados.
+    let ajusteIgv = deltaIgv;
+    if (ajusteIgv === undefined) {
+      const a = (await this.db.uno<{total:number; igv:number}>(`SELECT coalesce(sum(total),0) AS total, coalesce(sum(igv),0) AS igv
+        FROM consumos WHERE reserva_id = $1 AND estado = 'Activo'`, [reservaId], c))!;
+      const hospedaje = redondear(r.total - a.total);
+      if (delta < 0 && -delta > hospedaje + 0.001) throw falla(409, 'El descuento supera el hospedaje: anula primero los consumos no documentados que correspondan.', 'monto');
+      ajusteIgv = hospedaje > 0 ? delta * (r.igv - a.igv) / hospedaje : 0;
+    }
+    const igv = redondear(r.igv + ajusteIgv);
+    if (igv < 0 || igv > nuevo) throw falla(409, 'El ajuste no conserva los importes de IGV de la cuenta.');
+    const q = { total: nuevo, igv, subtotal: redondear(nuevo - igv) };
     await c.query('UPDATE reservas SET subtotal = $2, igv = $3, total = $4 WHERE id = $1', [reservaId, q.subtotal, q.igv, q.total]);
     return { codigo: r.codigo, anterior: r.total, total: q.total };
   }

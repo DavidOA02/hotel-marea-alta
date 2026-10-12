@@ -25,7 +25,8 @@ export const clienteBase = z.object({
   email,
   codigoPais: z.string().regex(/^\d{1,3}$/, 'Código de país no válido.'),
   telefono: z.string().transform(v => v.replace(/\D/g, '')),
-  residencia: z.enum(['PE', 'EXT'])
+  residencia: z.enum(['PE', 'EXT']),
+  idioma: z.union([z.enum(['es', 'en']), z.literal('')]).optional().nullable().transform(v => v || null)
 });
 
 /** Reglas cruzadas del cliente (documento, teléfono, IGV). */
@@ -148,6 +149,21 @@ export const notaCreditoSchema = z.object({
 });
 export type NotaCreditoInput = z.input<typeof notaCreditoSchema>;
 
+export const notaDebitoSchema = z.object({
+  motivo: z.enum(['01', '02', '03']),
+  monto: z.coerce.number().min(0.01).max(1_000_000).multipleOf(0.01),
+  sustento: texto('Explica el cargo adicional.', 250).min(5)
+});
+export type NotaDebitoInput = z.input<typeof notaDebitoSchema>;
+
+export const consumoSchema = z.object({
+  categoria: z.enum(['Restaurante', 'Bar', 'Tour', 'Minibar', 'LateCheckout', 'Otro']),
+  descripcion: texto('Describe el consumo.', 200),
+  cantidad: z.coerce.number().int().min(1).max(1000),
+  precioUnitario: z.coerce.number().min(0.01).max(100000).multipleOf(0.01)
+}).refine(d => d.cantidad * d.precioUnitario <= 1_000_000, { message: 'El consumo supera S/ 1 000 000.', path: ['precioUnitario'] });
+export type ConsumoInput = z.input<typeof consumoSchema>;
+
 /** Devolución de un pago. «reducirTotal» = descuento o noches no usadas (baja el total de la reserva). */
 export const devolucionSchema = z.object({
   monto: z.coerce.number({ error: 'Escribe el monto.' }).positive('El monto debe ser mayor a cero.').max(1_000_000),
@@ -210,6 +226,7 @@ export type TipoInput = z.input<typeof tipoSchema>;
 
 /* ---------------- Libro de Reclamaciones, boletín ---------------- */
 export const reclamacionSchema = z.object({
+  idioma: z.enum(['es','en']).default('es'),
   tipo: z.enum(['Reclamo', 'Queja']),
   nombreCompleto: texto('Escribe tus nombres y apellidos.', 160),
   tipoDocumento: z.enum(['DNI', 'CE', 'PAS', 'RUC']),

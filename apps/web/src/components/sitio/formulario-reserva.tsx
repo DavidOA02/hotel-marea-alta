@@ -148,6 +148,7 @@ export function FormularioReserva() {
               <input id="f-tel" type="tel" inputMode="tel" autoComplete="tel-national" placeholder="987 654 321" className="campo" {...register('telefono')} {...aria('telefono')} />
             </div>{err('telefono')}</div>
           <div><label className="campo-label" htmlFor="f-mail">Correo electrónico</label><input id="f-mail" type="email" autoComplete="email" className="campo" {...register('email')} {...aria('email')} />{err('email')}</div>
+          <div><label className="campo-label" htmlFor="f-idioma">Idioma de correos / Email language</label><select id="f-idioma" className="campo" {...register('idioma', {setValueAs:v=>v || null})}><option value="">Automático según residencia / Automatic</option><option value="es">Español</option><option value="en">English</option></select>{err('idioma')}</div>
           <div className="sm:col-span-2"><label className="campo-label" htmlFor="f-notas">Solicitudes especiales <span className="normal-case tracking-normal text-muted">(opcional)</span></label>
             <textarea id="f-notas" rows={3} placeholder="Aniversario, cuna, tour a Islas Ballestas, traslado desde Pisco…" className="campo font-sans text-base" {...register('notas')} /></div>
         </fieldset>

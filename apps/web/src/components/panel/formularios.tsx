@@ -77,7 +77,7 @@ export function FormCliente({ c, abierto, alCerrar, alCrear }: { c: any | null; 
   return (
     <FormularioModal abierto={abierto} alCerrar={alCerrar} titulo={c ? 'Editar cliente' : 'Nuevo cliente'} esquema={clienteSchema} ancho="max-w-2xl"
       valores={{ nombres: c?.nombres ?? '', apellidos: c?.apellidos ?? '', tipoDocumento: c?.tipoDocumento ?? 'DNI', numeroDocumento: c?.numeroDocumento ?? '', email: c?.email ?? '',
-        codigoPais: c?.codigoPais ?? '51', telefono: c?.telefono ?? '', residencia: c?.residencia ?? 'PE', aceptaPublicidad: c?.aceptaPublicidad ?? false, notas: c?.notas ?? '' }}
+        codigoPais: c?.codigoPais ?? '51', telefono: c?.telefono ?? '', residencia: c?.residencia ?? 'PE', idioma: c?.idioma ?? '', aceptaPublicidad: c?.aceptaPublicidad ?? false, notas: c?.notas ?? '' }}
       enviar={async d => { const r = await apiPanel(c ? `/gestion/clientes/${c.id}` : '/gestion/clientes', { method: c ? 'PUT' : 'POST', body: d }); if (!c) alCrear?.(r.id); return r; }}>
       {f => <div className="grid gap-4 sm:grid-cols-6">
         <Campo etiqueta="Nombres" className="sm:col-span-3" error={err(f, 'nombres')}><input {...f.register('nombres')} /></Campo>
@@ -86,6 +86,7 @@ export function FormCliente({ c, abierto, alCerrar, alCrear }: { c: any | null; 
         <Campo etiqueta="Número" className="sm:col-span-2" error={err(f, 'numeroDocumento')}><input {...f.register('numeroDocumento')} /></Campo>
         <Campo etiqueta="Residencia" className="sm:col-span-2" error={err(f, 'residencia')}><select {...f.register('residencia')}><option value="PE">Residente en Perú</option><option value="EXT">Extranjero no domiciliado</option></select></Campo>
         <Campo etiqueta="Correo" className="sm:col-span-3" error={err(f, 'email')}><input type="email" {...f.register('email')} /></Campo>
+        <Campo etiqueta="Idioma de correos" className="sm:col-span-3" error={err(f, 'idioma')}><select {...f.register('idioma', {setValueAs:v=>v || null})}><option value="">Automático según residencia</option><option value="es">Español</option><option value="en">English</option></select></Campo>
         <Campo etiqueta="País" error={err(f, 'codigoPais')}><input inputMode="numeric" maxLength={3} {...f.register('codigoPais')} /></Campo>
         <Campo etiqueta="Teléfono" className="sm:col-span-2" error={err(f, 'telefono')}><input inputMode="tel" {...f.register('telefono')} /></Campo>
         <Campo etiqueta="Notas internas" className="sm:col-span-6" ayuda="Preferencias, alergias, ocasiones especiales…"><textarea rows={2} className="!h-auto py-2" maxLength={500} {...f.register('notas')} /></Campo>

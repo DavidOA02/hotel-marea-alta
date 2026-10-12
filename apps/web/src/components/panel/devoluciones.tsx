@@ -12,17 +12,22 @@ import { BotonP, Estado, Modal } from './base';
 import { AlertaForm, Campo } from './campo';
 import { esVigente } from './comprobantes';
 
-const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Simulada'];
+const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Niubiz', 'Simulada'];
 const titulo = 'mb-2 text-xs font-medium uppercase tracking-[0.14em] text-gold-dark';
 
 /** Pagos de la reserva con sus devoluciones (el administrador puede devolver dinero). */
 export function SeccionPagos({ r, pagos, devoluciones, comprobantes, alCambiar }: { r: any; pagos: any[]; devoluciones: any[]; comprobantes: any[]; alCambiar: () => void }) {
   const admin = useSesion(s => s.usuario?.rol === 'Administrador');
   const [devolver, setDevolver] = useState<any>(null);
+  const [conciliar,setConciliar] = useState<any>(null), [codigo,setCodigo] = useState(''), [error,setError] = useState<string|null>(null), [ocupado,setOcupado] = useState(false);
   const vigente = comprobantes.find(esVigente);
   const reintentar = async (id: number) => {
     try { const x = await apiPanel(`/gestion/pagos/devoluciones/${id}/reintentar`, { method: 'POST', body: {} }); avisar(x.mensaje, x.estado === 'Completada' ? 'ok' : 'warn'); alCambiar(); refrescar(); }
     catch (e: any) { avisar(e.message, 'error'); }
+  };
+  const recuperar = async()=>{
+    setOcupado(true);setError(null);
+    try{const x=await apiPanel(`/gestion/pagos/devoluciones/${conciliar.id}/conciliar-niubiz`,{method:'POST',body:{codigo}});avisar(x.mensaje);setConciliar(null);alCambiar();refrescar();}catch(e:any){setError(e.message);}finally{setOcupado(false);}
   };
   return (
     <section aria-label="Pagos"><h3 className={titulo}>Pagos</h3>
@@ -38,16 +43,22 @@ export function SeccionPagos({ r, pagos, devoluciones, comprobantes, alCambiar }
             <div key={x.id} className="mt-1 flex items-start justify-between gap-3 pl-4 text-xs text-muted">
               <span className="flex gap-1"><CornerDownRight className="size-3.5 shrink-0" aria-hidden />Devolución {x.medio === 'Pasarela' ? `por ${ETIQUETAS[x.pasarela] ?? x.pasarela}` : 'registrada'} · {fechaHora(x.fechaResultado ?? x.fecha)} · {x.motivo}{x.reduceTotal ? ' · descuento' : ''}{x.mensaje && x.estado !== 'Completada' ? ` · ${x.mensaje}` : ''}</span>
               <span className="flex shrink-0 items-center gap-2 tabular-nums text-ink">−{soles(x.monto)}
-                {admin && x.estado === 'Pendiente' && x.medio === 'Pasarela' && <button onClick={() => reintentar(x.id)} title="Reintentar con la pasarela" aria-label="Reintentar devolución" className="grid size-6 place-items-center rounded hover:bg-sand"><RotateCcw className="size-3.5" /></button>}
+                {admin && x.estado === 'Pendiente' && x.medio === 'Pasarela' && (x.pasarela==='Niubiz' && x.solicitudEnviada && !x.referenciaExterna
+                  ? <button className="text-xs text-ocean underline" onClick={()=>{setConciliar(x);setCodigo('');setError(null);}}>Conciliar</button>
+                  : <button onClick={() => reintentar(x.id)} title={x.pasarela==='Niubiz' && x.referenciaExterna?'Consultar devolución':'Reintentar con la pasarela'} aria-label={x.pasarela==='Niubiz' && x.referenciaExterna?'Consultar devolución':'Reintentar devolución'} className="grid size-6 place-items-center rounded hover:bg-sand"><RotateCcw className="size-3.5" /></button>)}
                 <Estado valor={x.estado} /></span>
             </div>))}
         </li>))}</ul> : <p className="text-sm text-muted">Sin pagos registrados.</p>}
       <FormularioDevolucion pago={devolver} r={r} comprobante={vigente} abierto={!!devolver} alCerrar={() => setDevolver(null)} alDevolver={alCambiar} />
+      <Modal abierto={!!conciliar} alCerrar={()=>setConciliar(null)} titulo="Conciliar devolución Niubiz" pie={<BotonP disabled={ocupado} onClick={recuperar}>Consultar y conciliar</BotonP>}>
+        <AlertaForm texto={error}/><p className="mb-3 text-sm text-muted">Verifica la solicitud en Niubiz e ingresa su código de devolución. Se comprobarán la transacción y el monto antes de asociarla.</p>
+        <Campo etiqueta="Código de devolución Niubiz"><input inputMode="numeric" value={codigo} maxLength={100} onChange={e=>setCodigo(e.target.value)}/></Campo>
+      </Modal>
     </section>
   );
 }
 
-/** Devolver dinero de un pago: automática por la pasarela o registro de una devolución hecha en efectivo, transferencia o en el portal de Niubiz. */
+/** Devolver dinero por la pasarela o registrar una devolución manual. */
 export function FormularioDevolucion({ pago: p, r, comprobante, abierto, alCerrar, alDevolver }: { pago: any; r: any; comprobante: any; abierto: boolean; alCerrar: () => void; alDevolver: () => void }) {
   const [general, setGeneral] = useState<string | null>(null);
   const { register, handleSubmit, watch, reset, setError, formState: { errors, isSubmitting } } = useForm<DevolucionInput, unknown, any>({ resolver: zodResolver(devolucionSchema) });
@@ -64,7 +75,6 @@ export function FormularioDevolucion({ pago: p, r, comprobante, abierto, alCerra
   if (!p) return null;
   const automatica = AUTOMATICAS.includes(p.pasarela);
   const medio = automatica ? `Se devolverá automáticamente a la tarjeta o cuenta del huésped por ${ETIQUETAS[p.pasarela] ?? p.pasarela}.`
-    : p.pasarela === 'Niubiz' ? 'Niubiz no devuelve por API: haz la devolución en su portal y regístrala aquí.'
     : `Registra la devolución que ya entregaste al huésped (${p.metodo.toLowerCase()}, transferencia, Yape…).`;
   const activa = !['Cancelada', 'NoShow'].includes(r.estado);
   const nuevoTotal = redondear(r.total - monto), nuevoSaldo = redondear((reducir ? nuevoTotal : r.total) - (r.pagado - monto));
