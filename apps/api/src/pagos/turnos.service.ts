@@ -6,9 +6,8 @@ import { Db, Ejecutor } from '../db/db.service';
 import { falla } from '../comun/errores';
 import { Bitacora } from '../auditoria/bitacora.service';
 import type { UsuarioSesion } from '../auth/auth.service';
-import { soles } from '../correo/plantillas';
+import { dolares, soles } from '../correo/plantillas';
 
-const dolares = (n: number) => `US$ ${n.toFixed(2)}`;
 const suma = (l: number[]) => redondear(l.reduce((s, x) => s + x, 0));
 /** «faltante de S/ 10.00», «sobrante de US$ 5.00» o null si cuadra. */
 const diferencia = (n: number, f: (n: number) => string) => Math.abs(n) < 0.005 ? null : `${n < 0 ? 'faltante' : 'sobrante'} de ${f(Math.abs(n))}`;
@@ -42,7 +41,7 @@ export class TurnosCaja {
         p.monto, p.tipo_cambio, p.monto_soles, p.referencia, p.estado, p.registrado_por, p.motivo_anulacion
       FROM pagos p JOIN reservas r ON r.id = p.reserva_id JOIN clientes cl ON cl.id = r.cliente_id WHERE p.turno_id = $1 ORDER BY p.fecha_pago, p.id`, [id], c);
     const devoluciones = await this.db.query<any>(`SELECT dv.id, dv.fecha, r.codigo AS codigo_reserva, cl.nombres || ' ' || cl.apellidos AS cliente, p.metodo,
-        dv.monto, dv.motivo, dv.estado, dv.registrado_por
+        dv.monto, dv.monto_dolares, dv.motivo, dv.estado, dv.registrado_por
       FROM devoluciones dv JOIN pagos p ON p.id = dv.pago_id JOIN reservas r ON r.id = dv.reserva_id JOIN clientes cl ON cl.id = r.cliente_id
       WHERE dv.turno_id = $1 ORDER BY dv.fecha, dv.id`, [id], c);
     const movimientos = await this.db.query<any>('SELECT id, fecha, tipo, moneda, monto, motivo, registrado_por FROM movimientos_caja WHERE turno_id = $1 ORDER BY fecha, id', [id], c);
@@ -59,10 +58,12 @@ export class TurnosCaja {
         dolares: suma(l.filter(p => p.moneda === 'USD').map(p => p.monto)), devuelto: suma(devueltas.filter(d => d.metodo === metodo).map(d => d.monto)) };
     }).filter(x => x.cantidad || x.devuelto);
     const mov = (tipo: string, moneda: string) => suma(m.movimientos.filter(x => x.tipo === tipo && x.moneda === moneda).map(x => x.monto));
+    const devEfectivo = devueltas.filter(d => d.metodo === 'Efectivo');
     return {
       esperado: efectivoEsperado({ fondoInicial: t.fondoInicial, cobros, devoluciones: devueltas, movimientos: m.movimientos }),
       cobrado: suma(cobros.map(p => p.montoSoles)), devuelto: suma(devueltas.map(d => d.monto)), pagos: cobros.length, porMetodo,
-      ingresos: { soles: mov('Ingreso', 'PEN'), dolares: mov('Ingreso', 'USD') }, retiros: { soles: mov('Retiro', 'PEN'), dolares: mov('Retiro', 'USD') }
+      ingresos: { soles: mov('Ingreso', 'PEN'), dolares: mov('Ingreso', 'USD') }, retiros: { soles: mov('Retiro', 'PEN'), dolares: mov('Retiro', 'USD') },
+      devolucionesEfectivo: { soles: suma(devEfectivo.filter(d => d.montoDolares == null).map(d => d.monto)), dolares: suma(devEfectivo.map(d => d.montoDolares ?? 0)) }
     };
   }
 
@@ -70,7 +71,7 @@ export class TurnosCaja {
   async actual(u: UsuarioSesion) {
     const t = await this.db.uno<{ id: number }>(`SELECT id FROM turnos_caja WHERE usuario_id = $1 AND estado = 'Abierto'`, [u.id]);
     const avisos = u.rol === 'Administrador' ? await this.db.uno<{ porRevisar: number; abiertosLargos: number }>(`SELECT
-        count(*) FILTER (WHERE estado = 'Cerrado' AND fecha_revision IS NULL AND usuario_id <> $1 AND (diferencia_soles <> 0 OR diferencia_dolares <> 0)) AS por_revisar,
+        count(*) FILTER (WHERE estado = 'Cerrado' AND fecha_revision IS NULL AND (diferencia_soles <> 0 OR diferencia_dolares <> 0)) AS por_revisar,
         count(*) FILTER (WHERE estado = 'Abierto' AND usuario_id <> $1 AND fecha_apertura < now() - make_interval(hours => $2)) AS abiertos_largos
       FROM turnos_caja`, [u.id, HORAS_TURNO_LARGO]) : null;
     return { turno: t ? await this.detalle(t.id, u) : null, porRevisar: avisos?.porRevisar ?? 0, abiertosLargos: avisos?.abiertosLargos ?? 0, horasTurnoLargo: HORAS_TURNO_LARGO };
@@ -153,14 +154,13 @@ export class TurnosCaja {
     });
   }
 
-  /** El administrador da por revisado el arqueo de otro usuario (una sola vez). */
+  /** El administrador da por revisado un arqueo cerrado, también el de su propio turno (una sola vez). */
   async revisar(id: number, u: UsuarioSesion, d: z.output<typeof revisarTurnoSchema>) {
     return this.db.transaccion(async c => {
       const t = await this.db.uno<any>('SELECT * FROM turnos_caja WHERE id = $1 FOR UPDATE', [id], c);
       if (!t) throw falla(404, 'Turno de caja no encontrado.');
       if (t.estado !== 'Cerrado') throw falla(409, 'Solo se revisan turnos cerrados.');
       if (t.fechaRevision) throw falla(409, `El arqueo del turno N.° ${id} ya fue revisado por ${t.revisadoPor}.`);
-      if (t.usuarioId === u.id) throw falla(409, 'Otro administrador debe revisar el arqueo de tu propio turno.');
       const x = (await this.db.uno<any>(`UPDATE turnos_caja SET revisado_por = $2, fecha_revision = now(), nota_revision = $3 WHERE id = $1 RETURNING *`, [id, u.nombre, d.nota], c))!;
       await this.bitacora.registrar({ accion: 'turno.revisar', entidad: 'turno', entidadId: id,
         descripcion: `Arqueo del turno N.° ${id} de ${t.usuario} revisado${d.nota ? `: ${d.nota}` : ''}`, datos: { nota: d.nota } }, c);

@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { BarChart3, Bell, BellRing, CalendarRange, ChevronDown, DoorOpen, ExternalLink, HelpCircle, Hourglass, LayoutDashboard, LogOut, Mail, Menu, NotebookText, ReceiptText, ScrollText, Search, Tags, UserCog, Users, Wallet, X } from 'lucide-react';
+import { BarChart3, Bell, BellRing, CalendarRange, ChevronDown, DoorOpen, ExternalLink, HelpCircle, Hourglass, LayoutDashboard, LogOut, Mail, Menu, NotebookText, ReceiptText, ScrollText, Search, Sparkles, Tags, UserCog, Users, Wallet, Wrench, X } from 'lucide-react';
 import { hoyLima } from '@marea/shared';
 import { iniciales } from '@/lib/formato';
 import { apiPanel, useRefresco, useSesion } from '@/stores/sesion';
@@ -10,11 +10,12 @@ import { DialogoConfirmacion, Estado, Modal, BotonP } from '@/components/panel/b
 import { FichaReserva, FormularioNuevaReserva, FormularioPago, useFicha } from '@/components/panel/reservas';
 import { Emblema } from '@/components/logo';
 import { FormAbrirTurno, horasAbierto, TurnoChip } from '@/components/panel/caja';
+import { FormOrden } from '@/components/panel/operacion';
 
 const MINUTOS_INACTIVIDAD = Number(process.env.NEXT_PUBLIC_PANEL_INACTIVIDAD_MIN || 30);
 const MENU = [
   { grupo: 'General', items: [['/panel/dashboard', 'Dashboard', LayoutDashboard], ['/panel/recepcion', 'Recepción', BellRing]] },
-  { grupo: 'Operación', items: [['/panel/reservas', 'Reservas', CalendarRange], ['/panel/habitaciones', 'Habitaciones', DoorOpen], ['/panel/clientes', 'Clientes', Users], ['/panel/caja', 'Caja y pagos', Wallet], ['/panel/comprobantes', 'Comprobantes', ReceiptText], ['/panel/reclamaciones', 'Reclamaciones', NotebookText], ['/panel/correos', 'Correos', Mail]] },
+  { grupo: 'Operación', items: [['/panel/reservas', 'Reservas', CalendarRange], ['/panel/habitaciones', 'Habitaciones', DoorOpen], ['/panel/limpieza', 'Limpieza', Sparkles], ['/panel/mantenimiento', 'Mantenimiento', Wrench], ['/panel/clientes', 'Clientes', Users], ['/panel/caja', 'Caja y pagos', Wallet], ['/panel/comprobantes', 'Comprobantes', ReceiptText], ['/panel/reclamaciones', 'Reclamaciones', NotebookText], ['/panel/correos', 'Correos', Mail]] },
   { grupo: 'Administración', admin: true, items: [['/panel/reportes', 'Reportes', BarChart3], ['/panel/tarifas', 'Tipos y tarifas', Tags], ['/panel/usuarios', 'Usuarios', UserCog], ['/panel/bitacora', 'Bitácora', ScrollText]] }
 ] as const;
 const SOLO_ADMIN = ['/panel/reportes', '/panel/tarifas', '/panel/usuarios', '/panel/bitacora'];
@@ -74,7 +75,7 @@ export default function LayoutPanel({ children }: { children: React.ReactNode })
         {prohibida ? <div className="rounded-2xl border border-line bg-white p-10 text-center text-muted">Esta sección es solo para administradores.</div> : children}
       </main>
 
-      <FichaReserva /><FormularioPago /><FormularioNuevaReserva /><FormAbrirTurno /><DialogoConfirmacion />
+      <FichaReserva /><FormularioPago /><FormularioNuevaReserva /><FormAbrirTurno /><FormOrden /><DialogoConfirmacion />
       <Guia abierto={guia} alCerrar={() => setGuia(false)} admin={admin} />
       <Inactividad alExpirar={() => salir('inactividad')} />
     </div>
@@ -145,7 +146,7 @@ function Alertas() {
   const [abierto, setAbierto] = useState(false);
   useEffect(() => {
     const cargar = () => Promise.all([apiPanel('/gestion/recepcion'), apiPanel('/gestion/reclamaciones?estado=Pendiente'), apiPanel('/gestion/correos/resumen').catch(() => null),
-      apiPanel('/gestion/turnos/actual').catch(() => null)]).then(([r, rc, co, tu]: any) => {
+      apiPanel('/gestion/turnos/actual').catch(() => null), apiPanel('/gestion/mantenimiento/resumen').catch(() => null)]).then(([r, rc, co, tu, mt]: any) => {
       const hoy = hoyLima(); const venc = rc.filter((x: any) => x.fechaLimiteRespuesta < hoy).length;
       const h = tu?.horasTurnoLargo, largo = tu?.turno && horasAbierto(tu.turno) >= h ? 1 : 0;
       setItems(([[largo, `Tu turno de caja lleva más de ${h} h abierto: ciérralo con el arqueo`, '/panel/caja'],
@@ -154,7 +155,9 @@ function Alertas() {
         [co?.fallidos ?? 0, `${co?.fallidos} correo(s) no se pudieron enviar`, '/panel/correos?estado=Fallido'],
         [co?.atrasados ?? 0, `${co?.atrasados} correo(s) llevan más de 30 min en cola`, '/panel/correos?estado=Pendiente'],
         [r.llegadas.length, `${r.llegadas.length} llegada(s) pendientes de check-in`, '/panel/recepcion'],
-        [r.salidas.length, `${r.salidas.length} salida(s) de hoy`, '/panel/recepcion'], [r.limpieza.length, `${r.limpieza.length} habitación(es) por limpiar`, '/panel/habitaciones'],
+        [r.salidas.length, `${r.salidas.length} salida(s) de hoy`, '/panel/recepcion'], [r.limpieza.filter((h: any) => h.llegaHoy).length, `${r.limpieza.filter((h: any) => h.llegaHoy).length} habitación(es) por limpiar donde llega un huésped hoy`, '/panel/limpieza'],
+        [r.limpieza.filter((h: any) => !h.llegaHoy).length, `${r.limpieza.filter((h: any) => !h.llegaHoy).length} habitación(es) por limpiar sin llegada hoy`, '/panel/limpieza'],
+        [mt?.urgentes ?? 0, `${mt?.urgentes} orden(es) de mantenimiento urgentes`, '/panel/mantenimiento'],
         [venc, `${venc} reclamo(s) con plazo vencido`, '/panel/reclamaciones'], [rc.length - venc, `${rc.length - venc} reclamo(s) por responder`, '/panel/reclamaciones']] as [number, string, string][]).filter(x => x[0] > 0));
     }).catch(() => {});
     cargar(); const t = setInterval(cargar, 120000); return () => clearInterval(t);
@@ -204,9 +207,11 @@ function Guia({ abierto, alCerrar, admin }: { abierto: boolean; alCerrar: () => 
   const pasos = [
     ['Al empezar el turno', 'En «Caja y pagos» pulsa «Abrir turno» con el efectivo que recibes (fondo inicial). Luego abre Recepción: llegadas y salidas de hoy, huéspedes en el hotel y habitaciones por limpiar. La campana resume lo pendiente.'],
     ['Check-in', 'En «Llegadas de hoy» pulsa Check-in. Si el huésped es extranjero exonerado de IGV, pide su pasaporte y la Tarjeta Andina de Migración.'],
-    ['Cobrar', 'En la ficha de la reserva pulsa Registrar pago. Para Yape, Plin o transferencia anota el N.° de operación en «Referencia». Los cobros en efectivo exigen tu turno de caja abierto.'],
+    ['Cobrar', 'En la ficha de la reserva pulsa Registrar pago. Para Yape, Plin o transferencia anota el N.° de operación en «Referencia». Todos los cobros exigen tu turno de caja abierto.'],
     ['Al terminar el turno', 'Si llevaste efectivo a la caja fuerte, regístralo como retiro. Luego pulsa «Cerrar turno», cuenta billetes y monedas (y dólares, si hay) y explica cualquier diferencia. Imprime el arqueo para entregarlo firmado.'],
-    ['Check-out', 'Solo con saldo S/ 0.00. La habitación pasa a «Por limpiar»; márcala como limpia cuando esté lista.'],
+    ['Check-out', 'Solo con saldo S/ 0.00. La habitación pasa a «Por limpiar» y su limpieza de salida queda programada en «Limpieza».'],
+    ['Limpieza', 'En «Limpieza» está el plan del día: primero las habitaciones donde llega un huésped hoy. Asigna cada una, pulsa ▶ al empezar y «Lista» al terminar; si encuentran un desperfecto, escríbelo y se abre una orden de mantenimiento.'],
+    ['Mantenimiento', 'Registra cada falla en «Mantenimiento» (o «Reportar desperfecto» en la habitación). Si no se puede usar, marca «Bloquear la habitación» con las fechas: no se vende ni se asigna. Al resolverla vuelve a venderse y queda por limpiar.'],
     ['Teléfono y walk-in', 'Usa «Nueva reserva» o «Walk-in» (con check-in inmediato). El sistema asigna la habitación y calcula el IGV.'],
     ['Cambio de habitación', 'En la ficha pulsa «Cambiar habitación»: elige una libre, decide si se mantiene o se recalcula la tarifa y anota el motivo. Si el huésped ya está en el hotel, la habitación anterior pasa a «Por limpiar».'],
     ['Comprobante electrónico', 'Con la reserva pagada, en la ficha pulsa «Emitir»: boleta con el documento del huésped o factura con RUC. A los extranjeros exonerados se les emite factura de exportación.'],
@@ -214,7 +219,7 @@ function Guia({ abierto, alCerrar, admin }: { abierto: boolean; alCerrar: () => 
     ['Confirmación en PDF', 'En la ficha de la reserva pulsa PDF para entregar o enviar la confirmación al huésped.'],
     ['Buscar rápido', 'Pulsa la tecla / y escribe un código, nombre, documento o correo.'],
     ['Seguridad', `La sesión se cierra tras ${MINUTOS_INACTIVIDAD} minutos sin actividad. Cada pago y reserva queda registrado con tu nombre.`],
-    ...(admin ? [['Reportes y tarifas', 'Ocupación, ADR y RevPAR por periodo. Los cambios de tarifa solo afectan a reservas nuevas.'], ['Usuarios y reclamos', 'Crea cuentas con contraseña temporal. Responde los reclamos dentro de 15 días hábiles: la respuesta se envía sola al correo del consumidor.'], ['Devoluciones y notas de crédito', 'En la ficha, «Devolver» en el pago devuelve el dinero (por Culqi o Mercado Pago, o registrando efectivo o transferencia). Si es un descuento y ya hay boleta o factura, se emite sola la nota de crédito. Pasados 7 días un comprobante ya no se da de baja: usa «Nota de crédito».'], ['Arqueos', 'En «Caja y pagos» → «Turnos y arqueos» ves los turnos de todos. La campana avisa de arqueos con diferencia y de turnos abiertos hace más de 12 h; abre el arqueo, revisa la explicación y márcalo como revisado. Las devoluciones en efectivo salen de tu propio turno.'], ['Bitácora', 'Revisa quién hizo cada cambio (tarifas, pagos anulados, devoluciones, usuarios, check-out con saldo…). Los registros no se pueden borrar.'], ['Encuestas', 'En Reportes ves la calificación promedio, el NPS y los comentarios de los huéspedes.']] : [])
+    ...(admin ? [['Reportes y tarifas', 'Ocupación, ADR y RevPAR por periodo. Los cambios de tarifa solo afectan a reservas nuevas.'], ['Usuarios y reclamos', 'Crea cuentas con contraseña temporal. Responde los reclamos dentro de 15 días hábiles: la respuesta se envía sola al correo del consumidor.'], ['Devoluciones y notas de crédito', 'En la ficha, «Devolver» en el pago devuelve el dinero (por Culqi o Mercado Pago, o registrando efectivo o transferencia). Si es un descuento y ya hay boleta o factura, se emite sola la nota de crédito. Pasados 7 días un comprobante ya no se da de baja: usa «Nota de crédito».'], ['Arqueos', 'En «Caja y pagos» → «Turnos y arqueos» ves los turnos de todos. La campana avisa de arqueos con diferencia y de turnos abiertos hace más de 12 h; abre el arqueo, revisa la explicación y márcalo como revisado. Las devoluciones en efectivo salen de tu propio turno; las de pagos en dólares se entregan en dólares.'], ['Bitácora', 'Revisa quién hizo cada cambio (tarifas, pagos anulados, devoluciones, usuarios, check-out con saldo…). Los registros no se pueden borrar.'], ['Encuestas', 'En Reportes ves la calificación promedio, el NPS y los comentarios de los huéspedes.']] : [])
   ];
   return (
     <Modal abierto={abierto} alCerrar={alCerrar} titulo={`Guía rápida · ${admin ? 'Administrador' : 'Recepción'}`} ancho="max-w-2xl" pie={<BotonP onClick={alCerrar}>Entendido</BotonP>}>

@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { cambioHabitacionSchema, hoyLima, pagoSchema, redondear, reservaPanelSchema } from '@marea/shared';
+import { cambioHabitacionSchema, ETIQUETAS, hoyLima, pagoSchema, redondear, reservaPanelSchema } from '@marea/shared';
 import { z } from 'zod';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
@@ -11,6 +11,7 @@ import { Correos } from '../correo/correos.service';
 import type { PoolClient } from 'pg';
 import { PagosService, ReservaBloqueada } from '../pagos/pagos.service';
 import { TurnosCaja } from '../pagos/turnos.service';
+import { Limpieza } from '../operacion/limpieza.service';
 import { dmy, ReservasService, SQL_RESERVA } from '../reservas/reservas.service';
 import { SQL_COMPROBANTE } from '../facturacion/consultas';
 
@@ -19,7 +20,7 @@ import { SQL_COMPROBANTE } from '../facturacion/consultas';
 @UseGuards(SesionGuard)
 export class ReservasGestionController {
   constructor(private readonly db: Db, private readonly reservas: ReservasService, private readonly pagos: PagosService,
-              private readonly bitacora: Bitacora, private readonly correos: Correos, private readonly turnos: TurnosCaja) {}
+              private readonly bitacora: Bitacora, private readonly correos: Correos, private readonly turnos: TurnosCaja, private readonly limpieza: Limpieza) {}
 
   @Get('reservas')
   listar(@Query('estado') estado?: string, @Query('desde') desde?: string, @Query('hasta') hasta?: string,
@@ -44,9 +45,10 @@ export class ReservasGestionController {
     if (!reserva) throw falla(404, 'Reserva no encontrada.');
     const [pagos, devoluciones, cambios, comprobantes, correos, historial, consumos] = await Promise.all([
       this.db.query(`SELECT p.id, p.monto, p.moneda, p.tipo_cambio, p.monto_soles, p.metodo, p.referencia, p.estado, p.fecha_pago, p.registrado_por, p.motivo_anulacion, p.pasarela,
-          p.monto_soles - coalesce((SELECT sum(dv.monto) FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida'), 0) AS disponible_devolucion
+          p.monto_soles - coalesce((SELECT sum(dv.monto) FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida'), 0) AS disponible_devolucion,
+          CASE WHEN p.moneda = 'USD' THEN p.monto - coalesce((SELECT sum(dv.monto_dolares) FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida'), 0) END AS disponible_dolares
         FROM pagos p WHERE p.reserva_id = $1 ORDER BY p.fecha_pago`, [reserva.id]),
-      this.db.query(`SELECT id, pago_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha, fecha_resultado, solicitud_enviada, referencia_externa
+      this.db.query(`SELECT id, pago_id, monto, monto_dolares, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha, fecha_resultado, solicitud_enviada, referencia_externa
         FROM devoluciones WHERE reserva_id = $1 ORDER BY id`, [reserva.id]),
       this.db.query(`SELECT ch.fecha, ch.desde, ha.numero AS habitacion_anterior, hn.numero AS habitacion_nueva, ch.tarifa, ch.total_anterior, ch.total_nuevo, ch.motivo, ch.registrado_por
         FROM cambios_habitacion ch JOIN habitaciones ha ON ha.id = ch.habitacion_anterior_id JOIN habitaciones hn ON hn.id = ch.habitacion_nueva_id
@@ -70,8 +72,12 @@ export class ReservasGestionController {
     const hoy = hoyLima();
     const llegadas = await this.db.query(`${SQL_RESERVA} WHERE r.estado = 'Confirmada' AND r.fecha_entrada <= $1 AND r.fecha_salida > $1 ORDER BY r.hora_llegada NULLS LAST, h.numero`, [hoy]);
     const enCasa = await this.db.query<any>(`${SQL_RESERVA} WHERE r.estado = 'CheckIn' ORDER BY r.fecha_salida, h.numero`);
-    const limpieza = await this.db.query(`SELECT h.id, h.numero, t.nombre AS tipo FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
-      WHERE h.estado_limpieza = 'Sucia' AND h.estado = 'Operativa' ORDER BY h.numero`);
+    // Habitaciones por limpiar (o en limpieza), con su tarea y si llega un huésped hoy: esas van primero
+    const limpieza = await this.db.query(`SELECT h.id, h.numero, h.estado_limpieza, t.nombre AS tipo, l.id AS tarea_id, l.tipo AS tarea_tipo, l.asignada_a,
+        EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.estado = 'Confirmada' AND r.fecha_entrada <= $1 AND r.fecha_salida > $1) AS llega_hoy
+      FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
+      LEFT JOIN limpiezas l ON l.habitacion_id = h.id AND l.estado IN ('Pendiente','EnCurso')
+      WHERE h.estado_limpieza <> 'Limpia' AND h.estado = 'Operativa' ORDER BY llega_hoy DESC, h.numero`, [hoy]);
     return { hoy, llegadas, salidas: enCasa.filter(r => r.fechaSalida <= hoy), enCasa: enCasa.filter(r => r.fechaSalida > hoy), limpieza };
   }
 
@@ -90,7 +96,7 @@ export class ReservasGestionController {
       await c.query(`UPDATE reservas SET estado = 'CheckIn', fecha_check_in = now() WHERE id = $1`, [r.id]);
       await this.bitacora.registrar({ accion: 'reserva.checkin', entidad: 'reserva', entidadId: r.codigo, descripcion: `Check-in en la habitación ${r.habitacion}` }, c);
       return { codigo: r.codigo, estado: 'CheckIn', mensaje: `Check-in registrado: habitación ${r.habitacion}.`,
-        advertencia: r.estadoLimpieza === 'Sucia' ? `La habitación ${r.habitacion} figura como por limpiar.` : null };
+        advertencia: r.estadoLimpieza !== 'Limpia' ? `La habitación ${r.habitacion} figura como «${ETIQUETAS[r.estadoLimpieza].toLowerCase()}».` : null };
     });
   }
 
@@ -102,7 +108,7 @@ export class ReservasGestionController {
       if (forzado && !(u.rol === 'Administrador' && body?.forzarConSaldo))
         throw falla(409, `Hay un saldo pendiente de S/ ${r.saldo.toFixed(2)}. Registra el pago antes del check-out.`, 'saldo');
       await c.query(`UPDATE reservas SET estado = 'CheckOut', fecha_check_out = now() WHERE id = $1`, [r.id]);
-      await c.query(`UPDATE habitaciones SET estado_limpieza = 'Sucia' WHERE id = $1`, [r.habitacionId]);
+      await this.limpieza.programar(c, r.habitacionId, 'Salida', r.id, u.nombre);
       await this.bitacora.registrar({ accion: forzado ? 'reserva.checkout_con_saldo' : 'reserva.checkout', entidad: 'reserva', entidadId: r.codigo,
         descripcion: forzado ? `Check-out autorizado con saldo pendiente de S/ ${r.saldo.toFixed(2)}` : `Check-out de la habitación ${r.habitacion}`,
         datos: forzado ? { saldo: r.saldo } : undefined }, c);
@@ -137,11 +143,11 @@ export class ReservasGestionController {
     return this.transicion(codigo, async (r, c) => {
       if (['Cancelada', 'NoShow'].includes(r.estado)) throw falla(409, `No se registran pagos en reservas «${r.estado}».`);
       if (montoSoles > r.saldo + 0.01) throw falla(409, `El pago (S/ ${montoSoles.toFixed(2)}) supera el saldo pendiente (S/ ${r.saldo.toFixed(2)}).`, 'monto');
-      // El efectivo entra a la caja de quien cobra: exige su turno abierto. Los demás medios quedan en el turno si lo hay.
-      const turno = await this.turnos.delUsuario(c, u.id, d.metodo === 'Efectivo' ? 'cobrar en efectivo' : null);
+      // Todo cobro del panel queda en el turno de caja de quien cobra (el efectivo entra a su caja; los demás medios se cuadran al cerrar)
+      const turno = (await this.turnos.delUsuario(c, u.id, 'cobrar'))!;
       const x = await this.pagos.registrar(c, r, { monto: d.monto, moneda: d.moneda, tipoCambio: d.tipoCambio ?? null, montoSoles, metodo: d.metodo,
-        referencia: d.referencia, registradoPor: u.nombre, turnoId: turno?.id ?? null });
-      return { codigo: r.codigo, pagado: x.pagado, saldo: x.saldo, turnoId: turno?.id ?? null, mensaje: `Pago de S/ ${montoSoles.toFixed(2)} registrado${turno ? ` en el turno N.° ${turno.id}` : ''}.` };
+        referencia: d.referencia, registradoPor: u.nombre, turnoId: turno.id });
+      return { codigo: r.codigo, pagado: x.pagado, saldo: x.saldo, turnoId: turno.id, mensaje: `Pago de S/ ${montoSoles.toFixed(2)} registrado en el turno N.° ${turno.id}.` };
     });
   }
 

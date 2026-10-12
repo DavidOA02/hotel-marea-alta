@@ -8,6 +8,7 @@
 --  · Devoluciones de dinero (pasarela o manuales)
 --  · Recordatorio antes de la llegada y encuesta tras el check-out
 --  · Caja por turnos y arqueo
+--  · Limpieza y mantenimiento de habitaciones
 --  Lo aplican «npm run db», «npm run db:demo» y, sobre una base existente,
 --  «npm run db:migrar». Ejecutar DESPUÉS de 01_esquema.sql.
 -- =====================================================================
@@ -354,6 +355,8 @@ ALTER TABLE pagos ADD COLUMN IF NOT EXISTS turno_id int REFERENCES turnos_caja(i
 ALTER TABLE devoluciones ADD COLUMN IF NOT EXISTS turno_id int REFERENCES turnos_caja(id);
 CREATE INDEX IF NOT EXISTS ix_pagos_turno ON pagos (turno_id) WHERE turno_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_devoluciones_turno ON devoluciones (turno_id) WHERE turno_id IS NOT NULL;
+-- Lo cobrado en dólares se devuelve en dólares, al tipo de cambio del pago (monto sigue en soles)
+ALTER TABLE devoluciones ADD COLUMN IF NOT EXISTS monto_dolares numeric(10,2) CHECK (monto_dolares >= 0);
 
 -- Solo se registra dinero en un turno abierto. FOR SHARE espera a un cierre en curso y luego ve el turno ya cerrado.
 CREATE OR REPLACE FUNCTION exigir_turno_abierto() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -415,3 +418,69 @@ SELECT t.id AS turno_id, t.usuario, t.estado, t.fecha_apertura, (t.fecha_apertur
 FROM turnos_caja t
 LEFT JOIN (SELECT turno_id, sum(monto_soles) AS cobrado, sum(monto_soles) FILTER (WHERE metodo = 'Efectivo') AS efectivo, count(*) AS cantidad
            FROM pagos WHERE estado = 'Aprobado' AND turno_id IS NOT NULL GROUP BY turno_id) p ON p.turno_id = t.id;
+
+-- ---------------------------------------------------------------------
+-- 9. Limpieza y mantenimiento. Las tareas de limpieza registran quién
+--    limpia y cuánto tarda (la habitación pasa a «En limpieza» y luego a
+--    «Limpia»). Las órdenes de mantenimiento abiertas pueden bloquear una
+--    habitación por fechas: no se vende ni se asigna mientras dure.
+-- ---------------------------------------------------------------------
+ALTER TABLE habitaciones DROP CONSTRAINT IF EXISTS habitaciones_estado_limpieza_check;
+ALTER TABLE habitaciones ADD CONSTRAINT habitaciones_estado_limpieza_check CHECK (estado_limpieza IN ('Limpia','Sucia','EnLimpieza'));
+
+CREATE TABLE IF NOT EXISTS limpiezas (
+  id              int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  habitacion_id   int           NOT NULL REFERENCES habitaciones(id),
+  tipo            varchar(10)   NOT NULL CHECK (tipo IN ('Salida','Servicio','Profunda')),   -- tras el check-out, diaria con huésped, tras una reparación
+  estado          varchar(10)   NOT NULL DEFAULT 'Pendiente' CHECK (estado IN ('Pendiente','EnCurso','Terminada','Anulada')),
+  fecha           date          NOT NULL,                                                   -- día de trabajo (hora de Lima)
+  asignada_a      varchar(100),                                                             -- quién limpia (no necesita usuario del panel)
+  reserva_id      int           REFERENCES reservas(id),                                    -- estadía que la originó
+  creada_por      varchar(100)  NOT NULL,
+  fecha_creacion  timestamptz   NOT NULL DEFAULT now(),
+  inicio          timestamptz,
+  fin             timestamptz,
+  terminada_por   varchar(100),
+  observaciones   varchar(300),
+  CONSTRAINT ck_limpieza_tiempos CHECK ((estado = 'Pendiente' OR inicio IS NOT NULL OR estado = 'Anulada') AND (estado IN ('Terminada','Anulada')) = (fin IS NOT NULL))
+);
+-- Una sola tarea abierta por habitación
+CREATE UNIQUE INDEX IF NOT EXISTS ux_limpieza_abierta ON limpiezas (habitacion_id) WHERE estado IN ('Pendiente','EnCurso');
+CREATE INDEX IF NOT EXISTS ix_limpiezas_fecha ON limpiezas (fecha);
+
+CREATE TABLE IF NOT EXISTS mantenimientos (
+  id                int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  habitacion_id     int           REFERENCES habitaciones(id),                              -- NULL = área común
+  area              varchar(60),                                                            -- piscina, lobby, cocina…
+  categoria         varchar(20)   NOT NULL CHECK (categoria IN ('Electricidad','Gasfiteria','AireAcondicionado','Mobiliario','Electrodomesticos','Conectividad','Pintura','Otro')),
+  descripcion       varchar(300)  NOT NULL,
+  prioridad         varchar(10)   NOT NULL DEFAULT 'Media' CHECK (prioridad IN ('Baja','Media','Alta','Urgente')),
+  estado            varchar(10)   NOT NULL DEFAULT 'Pendiente' CHECK (estado IN ('Pendiente','EnProceso','Resuelto','Cancelado')),
+  -- Bloqueo: mientras la orden esté abierta, la habitación no se vende ni se asigna de «desde» a «hasta» (ese día vuelve a venderse)
+  bloquea           boolean       NOT NULL DEFAULT false,
+  bloqueo_desde     date,
+  bloqueo_hasta     date,
+  asignado_a        varchar(100),                                                           -- técnico o proveedor
+  reportado_por     varchar(100)  NOT NULL,
+  fecha_reporte     timestamptz   NOT NULL DEFAULT now(),
+  fecha_inicio      timestamptz,
+  fecha_cierre      timestamptz,
+  cerrado_por       varchar(100),
+  solucion          varchar(500),                                                           -- qué se hizo, o por qué se canceló
+  costo             numeric(10,2) CHECK (costo >= 0),
+  limpieza_id       int           REFERENCES limpiezas(id),                                 -- desperfecto encontrado al limpiar
+  CONSTRAINT ck_mant_ubicacion CHECK (habitacion_id IS NOT NULL OR area IS NOT NULL),
+  CONSTRAINT ck_mant_bloqueo CHECK (NOT bloquea OR (habitacion_id IS NOT NULL AND bloqueo_desde IS NOT NULL AND bloqueo_hasta IS NOT NULL AND bloqueo_hasta >= bloqueo_desde)),
+  CONSTRAINT ck_mant_cierre CHECK ((estado IN ('Resuelto','Cancelado')) = (fecha_cierre IS NOT NULL AND cerrado_por IS NOT NULL AND solucion IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_mant_abiertas ON mantenimientos (habitacion_id) WHERE estado IN ('Pendiente','EnProceso');
+CREATE INDEX IF NOT EXISTS ix_mant_reporte ON mantenimientos (fecha_reporte DESC);
+
+-- Power BI: órdenes de mantenimiento con días de atención y noches bloqueadas
+DROP VIEW IF EXISTS vw_mantenimiento_powerbi;
+CREATE VIEW vw_mantenimiento_powerbi AS
+SELECT m.id AS orden_id, coalesce('Hab. ' || h.numero, m.area) AS ubicacion, h.numero AS habitacion, t.nombre AS tipo_habitacion, m.categoria, m.prioridad, m.estado,
+       m.fecha_reporte, (m.fecha_reporte AT TIME ZONE 'America/Lima')::date AS fecha_reporte_dia, m.fecha_cierre,
+       round(extract(epoch FROM coalesce(m.fecha_cierre, now()) - m.fecha_reporte) / 86400, 1) AS dias_abierta,
+       CASE WHEN m.bloquea THEN m.bloqueo_hasta - m.bloqueo_desde ELSE 0 END AS noches_bloqueadas, m.costo, m.asignado_a
+FROM mantenimientos m LEFT JOIN habitaciones h ON h.id = m.habitacion_id LEFT JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id;

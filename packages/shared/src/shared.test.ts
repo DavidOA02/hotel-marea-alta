@@ -1,7 +1,8 @@
 import { cotizar, redondear, validarDocumento, validarTelefono, sumarDiasHabiles, diasEntre, enRango, sumarEstadias, horasParaLlegada,
   reservaWebSchema, reservaPanelSchema, pagoSchema, usuarioSchema, cambiarClaveSchema, reclamacionSchema, primerError, hoyLima, sumarDias,
   recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema, notaCreditoSchema, devolucionSchema, encuestaSchema,
-  sumarDenominaciones, efectivoEsperado, abrirTurnoSchema, movimientoCajaSchema, cerrarTurnoSchema } from './index';
+  sumarDenominaciones, efectivoEsperado, dolaresADevolver, abrirTurnoSchema, movimientoCajaSchema, cerrarTurnoSchema,
+  mantenimientoSchema, resolverMantenimientoSchema, tareaLimpiezaSchema } from './index';
 
 describe('Tarifas e IGV', () => {
   it('incluye IGV para residentes', () => {
@@ -160,6 +161,15 @@ describe('Caja por turnos y arqueo', () => {
       movimientos: [{ tipo: 'Retiro', moneda: 'PEN', monto: 300 }, { tipo: 'Ingreso', moneda: 'PEN', monto: 20.1 }, { tipo: 'Retiro', moneda: 'USD', monto: 40 }]
     })).toEqual({ soles: 320.1, dolares: 60 });
     expect(efectivoEsperado({ fondoInicial: 0, cobros: [], devoluciones: [], movimientos: [] })).toEqual({ soles: 0, dolares: 0 });
+    // Lo cobrado en dólares se devuelve en dólares
+    expect(efectivoEsperado({ fondoInicial: 100, cobros: [{ metodo: 'Efectivo', moneda: 'USD', monto: 100 }],
+      devoluciones: [{ metodo: 'Efectivo', monto: 185, montoDolares: 50 }], movimientos: [] })).toEqual({ soles: 100, dolares: 50 });
+  });
+  it('devolución en dólares al tipo de cambio del pago; lo último que queda se devuelve exacto', () => {
+    // Pago de US$ 100 × 3.725 = S/ 372.50
+    expect(dolaresADevolver(100, { disponible: 372.5, disponibleDolares: 100, tipoCambio: 3.725 })).toBe(26.85);
+    expect(dolaresADevolver(272.5, { disponible: 272.5, disponibleDolares: 73.15, tipoCambio: 3.725 })).toBe(73.15);
+    expect(dolaresADevolver(185, { disponible: 370, disponibleDolares: 100, tipoCambio: 3.7 })).toBe(50);
   });
   it('esquemas de apertura, movimiento y cierre', () => {
     expect(abrirTurnoSchema.parse({ fondoInicial: '200', nota: '' })).toEqual({ fondoInicial: 200, nota: null });
@@ -174,5 +184,28 @@ describe('Caja por turnos y arqueo', () => {
     if (!distinto.success) expect(primerError(distinto.error).campo).toBe('contadoSoles');
     expect(cerrarTurnoSchema.safeParse({ denominaciones: { '3': 1 }, contadoSoles: 3 }).success).toBe(false);
     expect(cerrarTurnoSchema.safeParse({ denominaciones: { '10': 1.5 }, contadoSoles: 15 }).success).toBe(false);
+  });
+});
+
+describe('Limpieza y mantenimiento', () => {
+  const base = { categoria: 'Gasfiteria', descripcion: 'Fuga en el lavadero', prioridad: 'Media' };
+  it('la orden es de una habitación o de un área común', () => {
+    expect(mantenimientoSchema.parse({ ...base, habitacionId: '', area: 'Piscina' })).toMatchObject({ habitacionId: null, area: 'Piscina', bloquea: false });
+    const sin = mantenimientoSchema.safeParse(base);
+    expect(sin.success).toBe(false);
+    if (!sin.success) expect(primerError(sin.error).campo).toBe('habitacionId');
+  });
+  it('el bloqueo exige habitación y fechas en orden', () => {
+    const campo = (x: object) => { const r = mantenimientoSchema.safeParse({ ...base, ...x }); return r.success ? null : primerError(r.error).campo; };
+    expect(campo({ area: 'Lobby', bloquea: true, bloqueoDesde: '2026-11-01', bloqueoHasta: '2026-11-02' })).toBe('bloquea');
+    expect(campo({ habitacionId: 3, bloquea: true })).toBe('bloqueoDesde');
+    expect(campo({ habitacionId: 3, bloquea: true, bloqueoDesde: '2026-11-02', bloqueoHasta: '2026-11-02' })).toBe('bloqueoHasta');
+    expect(campo({ habitacionId: 3, bloquea: true, bloqueoDesde: '2026-11-01', bloqueoHasta: '2027-06-01' })).toBe('bloqueoHasta');
+    expect(campo({ habitacionId: 3, bloquea: true, bloqueoDesde: '2026-11-01', bloqueoHasta: '2026-11-04' })).toBeNull();
+  });
+  it('resolver exige qué se hizo; el costo es opcional', () => {
+    expect(resolverMantenimientoSchema.parse({ solucion: 'Cambio de empaque', costo: '' })).toEqual({ solucion: 'Cambio de empaque', costo: null, limpiar: true });
+    expect(resolverMantenimientoSchema.safeParse({ solucion: 'ok' }).success).toBe(false);
+    expect(tareaLimpiezaSchema.parse({ habitacionId: '7', tipo: 'Salida', asignadaA: '' })).toEqual({ habitacionId: 7, tipo: 'Salida', asignadaA: null, iniciar: false });
   });
 });

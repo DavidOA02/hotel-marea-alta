@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CANALES, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, MOVIMIENTOS_CAJA, ROLES, TARIFAS_CAMBIO, TIPOS_DOCUMENTO } from './constantes';
+import { CANALES, CATEGORIAS_MANTENIMIENTO, ESTADOS_HABITACION, MAX_NOCHES, METODOS_PAGO, MOVIMIENTOS_CAJA, PRIORIDADES_MANTENIMIENTO, ROLES, TARIFAS_CAMBIO, TIPOS_DOCUMENTO, TIPOS_LIMPIEZA } from './constantes';
 import { DENOMINACIONES_SOLES, sumarDenominaciones } from './caja';
 import { validarDocumento, validarTelefono } from './documentos';
 import { diasEntre, hoyLima, sumarDias } from './fechas';
@@ -208,6 +208,53 @@ export const cerrarTurnoSchema = z.object({
 });
 export type CerrarTurnoInput = z.input<typeof cerrarTurnoSchema>;
 export const revisarTurnoSchema = z.object({ nota: opcional(300) });
+
+/* ---------------- Limpieza y mantenimiento ---------------- */
+/** Nueva tarea de limpieza (quién limpia no necesita usuario del panel). */
+export const tareaLimpiezaSchema = z.object({
+  habitacionId: z.coerce.number({ error: 'Elige la habitación.' }).int().positive('Elige la habitación.'),
+  tipo: z.enum(TIPOS_LIMPIEZA, { error: 'Elige el tipo de limpieza.' }),
+  asignadaA: opcional(100),
+  iniciar: z.boolean().default(false)
+});
+export type TareaLimpiezaInput = z.input<typeof tareaLimpiezaSchema>;
+export const asignarLimpiezaSchema = z.object({ asignadaA: opcional(100) });
+/** Al terminar: observaciones y, si se encontró, un desperfecto (crea una orden de mantenimiento). */
+export const terminarLimpiezaSchema = z.object({
+  observaciones: opcional(300),
+  desperfecto: opcional(300)
+});
+export type TerminarLimpiezaInput = z.input<typeof terminarLimpiezaSchema>;
+
+/** Orden de mantenimiento: de una habitación o de un área común. Si bloquea, la habitación no se vende ni se asigna en esas fechas. */
+export const mantenimientoSchema = z.object({
+  habitacionId: z.preprocess(v => (v === '' || v === null || v === undefined ? null : v), z.coerce.number().int().positive().nullable()),
+  area: opcional(60),
+  categoria: z.enum(CATEGORIAS_MANTENIMIENTO, { error: 'Elige la categoría.' }),
+  descripcion: texto('Describe el problema.', 300).min(5, 'Describe el problema (al menos 5 caracteres).'),
+  prioridad: z.enum(PRIORIDADES_MANTENIMIENTO, { error: 'Elige la prioridad.' }),
+  asignadoA: opcional(100),
+  bloquea: z.boolean().default(false),
+  bloqueoDesde: z.string().optional().nullable().transform(v => (v ? v : null)),
+  bloqueoHasta: z.string().optional().nullable().transform(v => (v ? v : null))
+}).superRefine((d, ctx) => {
+  if (!d.habitacionId && !d.area) ctx.addIssue({ code: 'custom', message: 'Elige la habitación o escribe el área.', path: ['habitacionId'] });
+  if (!d.bloquea) return;
+  if (!d.habitacionId) ctx.addIssue({ code: 'custom', message: 'Solo se bloquean habitaciones.', path: ['bloquea'] });
+  if (!d.bloqueoDesde || !/^\d{4}-\d{2}-\d{2}$/.test(d.bloqueoDesde)) ctx.addIssue({ code: 'custom', message: 'Indica desde qué fecha se bloquea.', path: ['bloqueoDesde'] });
+  else if (!d.bloqueoHasta || !/^\d{4}-\d{2}-\d{2}$/.test(d.bloqueoHasta)) ctx.addIssue({ code: 'custom', message: 'Indica hasta qué fecha (la habitación vuelve a venderse ese día).', path: ['bloqueoHasta'] });
+  else if (d.bloqueoHasta <= d.bloqueoDesde) ctx.addIssue({ code: 'custom', message: 'El fin del bloqueo debe ser posterior al inicio.', path: ['bloqueoHasta'] });
+  else if (diasEntre(d.bloqueoDesde, d.bloqueoHasta) > 180) ctx.addIssue({ code: 'custom', message: 'Para más de 180 días marca la habitación «Fuera de servicio».', path: ['bloqueoHasta'] });
+});
+export type MantenimientoInput = z.input<typeof mantenimientoSchema>;
+export const resolverMantenimientoSchema = z.object({
+  solucion: z.string({ error: 'Describe qué se hizo.' }).trim().min(5, 'Describe qué se hizo (al menos 5 caracteres).').max(500, 'Máximo 500 caracteres.'),
+  costo: z.preprocess(v => (v === '' || v === null || v === undefined ? null : v), z.coerce.number().min(0, 'El costo no puede ser negativo.').max(1_000_000).nullable()),
+  /** La habitación pasa a «Por limpiar» con una limpieza profunda pendiente. */
+  limpiar: z.boolean().default(true)
+});
+export type ResolverMantenimientoInput = z.input<typeof resolverMantenimientoSchema>;
+export const cancelarMantenimientoSchema = z.object({ motivo });
 
 /** Encuesta tras la estadía: calificación de 1 a 5 y recomendación de 0 a 10 (NPS). */
 export const encuestaSchema = z.object({

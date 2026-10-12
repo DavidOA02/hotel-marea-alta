@@ -16,6 +16,7 @@ Importa solo las vistas preparadas, que ya tienen nombres claros y los cálculos
 | `vw_reservas_powerbi` | Una fila por reserva: fechas, noches, canal, residencia, montos, pagado y saldo |
 | `vw_ocupacion_diaria` | Día × tipo de habitación: disponibles, ocupadas e ingreso del día (prorrateado) |
 | `vw_pagos_powerbi` | Pagos con método, moneda, estado y turno de caja (`turno_id`; vacío en pagos en línea) |
+| `vw_mantenimiento_powerbi` | Una orden de mantenimiento por fila: ubicación, categoría, prioridad, estado, días abierta, noches bloqueadas y costo |
 | `vw_turnos_caja_powerbi` | Un turno de caja por fila: usuario, horas abierto, fondo, cobrado, efectivo esperado y contado, diferencia (− faltante, + sobrante) y si fue revisado |
 | `vw_reclamaciones_powerbi` | Libro de Reclamaciones con días de respuesta y si están fuera de plazo |
 | `calendario` | Tabla de fechas 2024–2028 con temporada (Alta verano, Fiestas Patrias, Regular) |
@@ -26,6 +27,7 @@ Importa solo las vistas preparadas, que ya tienen nombres claros y los cálculos
 - `calendario[fecha]` 1 → * `vw_pagos_powerbi[fecha_pago_dia]`
 - `calendario[fecha]` 1 → * `vw_turnos_caja_powerbi[fecha_apertura_dia]`
 - `vw_turnos_caja_powerbi[turno_id]` 1 → * `vw_pagos_powerbi[turno_id]`
+- `calendario[fecha]` 1 → * `vw_mantenimiento_powerbi[fecha_reporte_dia]`
 
 Marca `calendario` como **tabla de fechas** (columna `fecha`).
 

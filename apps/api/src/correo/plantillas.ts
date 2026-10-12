@@ -16,6 +16,7 @@ const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', '
 export const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const parrafos = (v: unknown) => esc(v).replace(/\r?\n/g, '<br>');
 export const soles = (n: number | null | undefined) => 'S/ ' + nf2.format(Number(n || 0));
+export const dolares = (n: number | null | undefined) => 'US$ ' + nf2.format(Number(n || 0));
 export function fechaLarga(iso: string | Date | null | undefined) {
   if (!iso) return '—';
   const d = new Date((iso instanceof Date ? iso.toISOString() : String(iso)).slice(0, 10) + 'T12:00:00Z');
@@ -124,14 +125,17 @@ export function encuestaEstadia(r: ReservaCorreo, token: string): Mensaje {
   };
 }
 
-export function devolucionRealizada(r: ReservaCorreo, d: { monto: number; medio: string; pasarela: string | null; metodo: string; motivo: string }): Mensaje {
+/** «S/ 185.00» o, si se devolvió en dólares, «US$ 50.00 (S/ 185.00)». */
+export const importeDevuelto = (d: { monto: number; montoDolares?: number | null }) => d.montoDolares != null ? `${dolares(d.montoDolares)} (${soles(d.monto)})` : soles(d.monto);
+
+export function devolucionRealizada(r: ReservaCorreo, d: { monto: number; montoDolares?: number | null; medio: string; pasarela: string | null; metodo: string; motivo: string }): Mensaje {
   if (enIngles(r)) return ingles.devolucion(r, d);
   const como = d.medio === 'Pasarela'
     ? `Devolvimos el importe a tu medio de pago a través de ${d.pasarela === 'MercadoPago' ? 'Mercado Pago' : d.pasarela}. Según tu banco, puede tardar algunos días hábiles en verse en tu estado de cuenta.`
     : `Registramos la devolución por ${d.metodo.toLowerCase()}.`;
-  const filas: [string, string][] = [['Reserva', r.codigo], ['Monto devuelto', soles(d.monto)], ['Motivo', d.motivo]];
+  const filas: [string, string][] = [['Reserva', r.codigo], ['Monto devuelto', importeDevuelto(d)], ['Motivo', d.motivo]];
   return {
-    asunto: `Devolución de ${soles(d.monto)} · Reserva ${r.codigo}`,
+    asunto: `Devolución de ${d.montoDolares != null ? dolares(d.montoDolares) : soles(d.monto)} · Reserva ${r.codigo}`,
     html: marco('Te devolvimos dinero', `<p>Hola ${esc(primerNombre(r.cliente))}:</p>${tabla(filas)}<p>${esc(como)}</p>`),
     texto: `Te devolvimos dinero.\n\n${textoTabla(filas)}\n\n${como}${pie()}`
   };

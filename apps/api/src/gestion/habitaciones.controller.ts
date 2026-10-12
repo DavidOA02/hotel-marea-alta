@@ -1,24 +1,32 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
-import { ETIQUETAS, habitacionSchema, hoyLima, limpiezaSchema, tipoSchema } from '@marea/shared';
+import { ETIQUETAS, habitacionSchema, hoyLima, limpiezaSchema, sumarDias, tipoSchema } from '@marea/shared';
 import { z } from 'zod';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
 import { ZodPipe } from '../comun/zod.pipe';
-import { Roles, SesionGuard } from '../auth/guards';
+import { Roles, SesionGuard, Usuario } from '../auth/guards';
+import { UsuarioSesion } from '../auth/auth.service';
+import { Limpieza } from '../operacion/limpieza.service';
+import { sqlBloqueo } from '../reservas/consultas';
 import { Bitacora, cambios } from '../auditoria/bitacora.service';
 
 /** Habitaciones (tablero, CRUD, limpieza) y tipos con tarifas. */
 @Controller('gestion')
 @UseGuards(SesionGuard)
 export class HabitacionesController {
-  constructor(private readonly db: Db, private readonly bitacora: Bitacora) {}
+  constructor(private readonly db: Db, private readonly bitacora: Bitacora, private readonly limpieza: Limpieza) {}
 
   @Get('habitaciones')
   async listar() {
     const hoy = hoyLima();
     const habs = await this.db.query<any>(`SELECT h.id, h.numero, h.piso, h.tipo_habitacion_id AS tipo_id, t.codigo AS tipo_codigo, t.nombre AS tipo,
-      t.capacidad, t.precio_noche, h.estado, h.estado_limpieza, h.notas, (SELECT count(*) FROM reservas r WHERE r.habitacion_id = h.id) AS total_reservas
-      FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id ORDER BY h.piso, h.numero`);
+      t.capacidad, t.precio_noche, h.estado, h.estado_limpieza, h.notas, (SELECT count(*) FROM reservas r WHERE r.habitacion_id = h.id) AS total_reservas,
+      l.id AS tarea_id, l.tipo AS tarea_tipo, l.estado AS tarea_estado, l.asignada_a,
+      (SELECT count(*) FROM mantenimientos m WHERE m.habitacion_id = h.id AND m.estado IN ('Pendiente','EnProceso')) AS mantenimientos_abiertos,
+      EXISTS (${sqlBloqueo('h.id', '$1', '$2')}) AS bloqueada
+      FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
+      LEFT JOIN limpiezas l ON l.habitacion_id = h.id AND l.estado IN ('Pendiente','EnCurso')
+      ORDER BY h.piso, h.numero`, [hoy, sumarDias(hoy, 1)]);
     const res = await this.db.query<any>(`SELECT r.habitacion_id, r.codigo, r.estado, r.fecha_entrada, r.fecha_salida, c.nombres || ' ' || c.apellidos AS huesped
       FROM reservas r JOIN clientes c ON c.id = r.cliente_id WHERE r.estado IN ('Confirmada','CheckIn') AND r.fecha_salida >= $1 ORDER BY r.fecha_entrada`, [hoy]);
     return habs.map(h => {
@@ -27,7 +35,7 @@ export class HabitacionesController {
       const llega = propias.find(r => r.estado === 'Confirmada' && r.fechaEntrada <= hoy && r.fechaSalida > hoy);
       const prox = propias.find(r => r.estado === 'Confirmada' && r.fechaEntrada > hoy);
       const situacion = enCasa ? (enCasa.fechaSalida <= hoy ? 'Salida hoy' : 'Ocupada') : llega ? 'Llegada hoy'
-        : h.estado === 'Mantenimiento' ? 'Mantenimiento' : h.estado === 'FueraDeServicio' ? 'Fuera de servicio' : 'Libre';
+        : h.estado === 'Mantenimiento' || h.bloqueada ? 'Mantenimiento' : h.estado === 'FueraDeServicio' ? 'Fuera de servicio' : 'Libre';
       const actual = enCasa ?? llega;
       return { ...h, situacion, huesped: actual?.huesped ?? null, codigoReserva: actual?.codigo ?? null, salidaPrevista: actual?.fechaSalida ?? null, proximaLlegada: prox?.fechaEntrada ?? null };
     });
@@ -83,14 +91,10 @@ export class HabitacionesController {
     return { mensaje: `Habitación ${h.numero} eliminada.` };
   }
 
+  /** Marcado rápido: «Limpia» da por terminada la limpieza abierta de la habitación. */
   @Patch('habitaciones/:id/limpieza')
-  async limpieza(@Param('id', ParseIntPipe) id: number, @Body(new ZodPipe(limpiezaSchema)) d: { estadoLimpieza: string }) {
-    return this.db.transaccion(async c => {
-      const h = await this.db.uno<any>('UPDATE habitaciones SET estado_limpieza = $2 WHERE id = $1 RETURNING id, numero, estado_limpieza', [id, d.estadoLimpieza], c);
-      if (!h) throw falla(404, 'Habitación no encontrada.');
-      await this.bitacora.registrar({ accion: 'habitacion.limpieza', entidad: 'habitacion', entidadId: id, descripcion: `Habitación ${h.numero} marcada como ${ETIQUETAS[d.estadoLimpieza].toLowerCase()}` }, c);
-      return h;
-    });
+  limpiezaRapida(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(limpiezaSchema)) d: { estadoLimpieza: 'Limpia' | 'Sucia' }) {
+    return this.limpieza.marcar(id, d.estadoLimpieza, u);
   }
 
   @Get('tipos')

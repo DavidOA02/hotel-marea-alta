@@ -733,10 +733,10 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       ana = (await http.post('/api/auth/login').send({ email: 'ana@mareaalta.pe', clave: 'Ana2026xy' }).expect(200)).body.accessToken;
     });
 
-    it('sin turno abierto no se cobra en efectivo; los demás medios se registran sin turno', async () => {
+    it('sin turno abierto no se cobra con ningún medio', async () => {
       codigo = await reserva(300);
-      expect((await cobrar(N(), codigo, { monto: 100, metodo: 'Efectivo' }).expect(409)).body.mensaje).toBe('Abre tu turno de caja para cobrar en efectivo.');
-      expect((await cobrar(N(), codigo, { monto: 50, metodo: 'Tarjeta' }).expect(200)).body).toMatchObject({ turnoId: null, saldo: 400 });
+      for (const metodo of ['Efectivo', 'Tarjeta', 'Yape'])
+        expect((await cobrar(N(), codigo, { monto: 100, metodo }).expect(409)).body.mensaje).toBe('Abre tu turno de caja para cobrar.');
       expect((await actual(N())).turno).toBeNull();
     });
 
@@ -744,13 +744,15 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect((await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: -5 }).expect(400)).body.campo).toBe('fondoInicial');
       turnoAna = (await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: 200, nota: 'Turno tarde' }).expect(201)).body.id;
       expect((await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: 100 }).expect(409)).body.mensaje).toMatch(/Ya tienes un turno de caja abierto/);
+      await cobrar(N(), codigo, { monto: 50, metodo: 'Tarjeta' }).expect(200);
       await cobrar(N(), codigo, { monto: 150, metodo: 'Efectivo' }).expect(200);
       await cobrar(N(), codigo, { monto: 50, moneda: 'USD', tipoCambio: 3.7, metodo: 'Efectivo' }).expect(200);
       expect((await cobrar(N(), codigo, { monto: 65, metodo: 'Yape', referencia: 'OP-9' }).expect(200)).body).toMatchObject({ turnoId: turnoAna, saldo: 0 });
       let t = (await actual(N())).turno;
       expect(t).toMatchObject({ id: turnoAna, estado: 'Abierto', fondoInicial: 200 });
-      expect(t.resumen).toMatchObject({ esperado: { soles: 350, dolares: 50 }, cobrado: 400, pagos: 3 });
+      expect(t.resumen).toMatchObject({ esperado: { soles: 350, dolares: 50 }, cobrado: 450, pagos: 4 });
       expect(t.resumen.porMetodo).toEqual([
+        { metodo: 'Tarjeta', cantidad: 1, montoSoles: 50, soles: 50, dolares: 0, devuelto: 0 },
         { metodo: 'Yape', cantidad: 1, montoSoles: 65, soles: 65, dolares: 0, devuelto: 0 },
         { metodo: 'Efectivo', cantidad: 2, montoSoles: 335, soles: 150, dolares: 50, devuelto: 0 }]);
 
@@ -772,7 +774,7 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(c).toMatchObject({ estado: 'Cerrado', cerradoPor: 'Ana Caja', esperadoSoles: 70, contadoSoles: 60, diferenciaSoles: -10, esperadoDolares: 50, diferenciaDolares: 0,
         denominaciones: { '50': 1, '10': 1 }, mensaje: `Turno N.° ${turnoAna} cerrado con un faltante de S/ 10.00.` });
 
-      expect((await cobrar(N(), await reserva(312), { monto: 1, metodo: 'Efectivo' }).expect(409)).body.mensaje).toBe('Abre tu turno de caja para cobrar en efectivo.');
+      expect((await cobrar(N(), await reserva(312), { monto: 1, metodo: 'Efectivo' }).expect(409)).body.mensaje).toBe('Abre tu turno de caja para cobrar.');
       expect((await http.post(`${ruta}/movimientos`).set(N()).send({ tipo: 'Ingreso', moneda: 'PEN', monto: 5, motivo: 'Turno cerrado' }).expect(409)).body.mensaje).toMatch(/ya está cerrado/);
       await http.post(`${ruta}/cerrar`).set(N()).send({ contadoSoles: 70 }).expect(409);
       const [b] = await db().query<any>(`SELECT usuario, descripcion FROM bitacora WHERE accion = 'turno.cerrar' AND entidad_id = $1`, [String(turnoAna)]);
@@ -784,7 +786,7 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(propios.map((t: any) => t.id)).toEqual([turnoAna]);
       const todos = (await http.get(`/api/gestion/turnos?desde=${hoy}&hasta=${hoy}`).set(A()).expect(200)).body;
       expect(todos.length).toBeGreaterThanOrEqual(3);
-      expect(todos.find((t: any) => t.id === turnoAna)).toMatchObject({ pagos: 3, cobrado: 400, diferenciaSoles: -10 });
+      expect(todos.find((t: any) => t.id === turnoAna)).toMatchObject({ pagos: 4, cobrado: 450, diferenciaSoles: -10 });
       expect(todos.find((t: any) => t.usuario === 'Administrador').esperadoActual).toEqual({ soles: expect.any(Number), dolares: 0 });
       expect((await actual(A())).porRevisar).toBe(1);
 
@@ -820,6 +822,27 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(t.devoluciones.map((x: any) => [x.monto, x.metodo])).toContainEqual([100, 'Efectivo']);
     });
 
+    it('lo cobrado en dólares se devuelve en dólares y el administrador puede revisar su propio arqueo', async () => {
+      const r = await reserva(320);
+      await cobrar(R(), r, { monto: 100, moneda: 'USD', tipoCambio: 3.725, metodo: 'Efectivo' }).expect(200);   // S/ 372.50
+      const pago = (await ficha(r)).pagos[0];
+      expect(pago).toMatchObject({ disponibleDevolucion: 372.5, disponibleDolares: 100 });
+      expect((await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({ monto: 100, motivo: 'Saldo a favor' }).expect(409)).body)
+        .toEqual({ mensaje: 'En tu caja solo debería haber US$ 0.00 en efectivo.', campo: 'monto' });
+      const turnoAdmin = (await actual(A())).turno;
+      await http.post(`/api/gestion/turnos/${turnoAdmin.id}/movimientos`).set(A()).send({ tipo: 'Ingreso', moneda: 'USD', monto: 100, motivo: 'Dólares de la caja fuerte' }).expect(201);
+      expect((await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({ monto: 100, motivo: 'Saldo a favor' }).expect(200)).body).toMatchObject({ monto: 100, montoDolares: 26.85 });
+      expect((await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({ monto: 272.5, motivo: 'Cancelación' }).expect(200)).body.montoDolares).toBe(73.15);
+      const t = (await actual(A())).turno;
+      expect(t.resumen.esperado).toEqual({ soles: 0, dolares: 0 });
+      expect(t.resumen.devolucionesEfectivo.dolares).toBe(100);
+      const [correo] = await db().query<any>(`SELECT asunto FROM correos WHERE tipo = 'devolucion' AND reserva_id = (SELECT id FROM reservas WHERE codigo = $1) ORDER BY id DESC LIMIT 1`, [r]);
+      expect(correo.asunto).toBe(`Devolución de US$ 73.15 · Reserva ${r}`);
+
+      await http.post(`/api/gestion/turnos/${t.id}/cerrar`).set(A()).send({ contadoSoles: 0, contadoDolares: 0 }).expect(200);
+      expect((await http.post(`/api/gestion/turnos/${t.id}/revisar`).set(A()).send({ nota: 'Único administrador' }).expect(200)).body).toMatchObject({ revisadoPor: 'Administrador' });
+    });
+
     it('un cierre simultáneo con cobros: cada pago queda en el arqueo o se rechaza, nunca a medias', async () => {
       const id = (await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: 0 }).expect(201)).body.id;
       const codigos: string[] = [];
@@ -829,10 +852,116 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
         ...codigos.map(c => cobrar(N(), c, { monto: 10, metodo: 'Efectivo' }))]);
       expect(cierre.status).toBe(200);
       const ok = cobros.filter(x => x.status === 200);
-      cobros.filter(x => x.status !== 200).forEach(x => { expect(x.status).toBe(409); expect(x.body.mensaje).toBe('Abre tu turno de caja para cobrar en efectivo.'); });
+      cobros.filter(x => x.status !== 200).forEach(x => { expect(x.status).toBe(409); expect(x.body.mensaje).toBe('Abre tu turno de caja para cobrar.'); });
       const [{ n }] = await db().query<any>('SELECT count(*) AS n FROM pagos WHERE turno_id = $1', [id]);
       expect(n).toBe(ok.length);
       expect(cierre.body.esperadoSoles).toBe(10 * ok.length);
+    });
+  });
+
+  describe('Limpieza y mantenimiento', () => {
+    const habs = async () => (await http.get('/api/gestion/habitaciones').set(R()).expect(200)).body;
+    const plan = async () => (await http.get('/api/gestion/limpieza').set(R()).expect(200)).body;
+    const nuevaHabitacion = async (numero: string, tipo = 'duna') =>
+      (await http.post('/api/gestion/habitaciones').set(A()).send({ numero, piso: 9, tipoHabitacion: tipo, estado: 'Operativa' }).expect(201)).body.id as number;
+    const dunasLibres = async (a: number, b: number) =>
+      (await http.get(`/api/disponibilidad?entrada=${d(a)}&salida=${d(b)}&huespedes=1`)).body.find((x: any) => x.codigo === 'duna').disponibles;
+    let l01: number, l02: number, codigoLlega: string;
+
+    beforeAll(async () => { l01 = await nuevaHabitacion('L01'); l02 = await nuevaHabitacion('L02'); });
+
+    it('el check-out deja la limpieza de salida; con llegada hoy va primero; se asigna, empieza y termina con un desperfecto', async () => {
+      await db().query(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total, estado, canal, fecha_check_in)
+        VALUES ('MA9900201', 1, $1, $2, $3, 1, 381.36, 68.64, 450, 'CheckIn', 'Web', now() - interval '1 day')`, [l01, d(-1), hoy]);
+      codigoLlega = (await reservaPanel({ tipoHabitacion: 'duna', huespedes: 1, habitacionId: l01, fechaEntrada: hoy, fechaSalida: d(1) })).codigo;
+      await http.post('/api/gestion/reservas/MA9900201/checkout').set(A()).send({ forzarConSaldo: true }).expect(200);
+
+      let p = (await plan()).habitaciones.find((h: any) => h.id === l01);
+      expect(p).toMatchObject({ estadoLimpieza: 'Sucia', necesita: 'Salida', prioridad: 'Alta', situacion: 'Llega hoy', tareaEstado: 'Pendiente', tareaTipo: 'Salida' });
+      expect((await plan()).resumen.llegadasSinLimpiar).toBeGreaterThanOrEqual(1);
+      expect((await http.get('/api/gestion/recepcion').set(R())).body.limpieza.find((h: any) => h.id === l01)).toMatchObject({ llegaHoy: true, tareaTipo: 'Salida' });
+      expect((await http.post('/api/gestion/limpieza').set(R()).send({ habitacionId: l01, tipo: 'Profunda' }).expect(409)).body.mensaje).toMatch(/ya tiene una limpieza pendiente/);
+
+      await http.post(`/api/gestion/limpieza/${p.tareaId}/asignar`).set(R()).send({ asignadaA: 'Rosa' }).expect(200);
+      await http.post(`/api/gestion/limpieza/${p.tareaId}/iniciar`).set(R()).expect(200);
+      expect((await habs()).find((h: any) => h.id === l01)).toMatchObject({ estadoLimpieza: 'EnLimpieza', asignadaA: 'Rosa', tareaEstado: 'EnCurso' });
+      expect((await http.post(`/api/gestion/reservas/${codigoLlega}/checkin`).set(R()).send({}).expect(200)).body.advertencia).toBe('La habitación L01 figura como «en limpieza».');
+
+      const fin = (await http.post(`/api/gestion/limpieza/${p.tareaId}/terminar`).set(R()).send({ observaciones: 'Sin novedad', desperfecto: 'La ducha gotea' }).expect(200)).body;
+      expect(fin.mensaje).toBe(`Habitación L01 lista. Se abrió la orden de mantenimiento N.° ${fin.ordenMantenimiento}.`);
+      expect((await http.get(`/api/gestion/mantenimiento/${fin.ordenMantenimiento}`).set(R()).expect(200)).body)
+        .toMatchObject({ habitacion: 'L01', categoria: 'Otro', estado: 'Pendiente', descripcion: 'La ducha gotea', limpiezaId: p.tareaId, reportadoPor: 'Recepción' });
+      p = (await plan()).habitaciones.find((h: any) => h.id === l01);
+      expect(p).toMatchObject({ estadoLimpieza: 'Limpia', tareaId: null, situacion: 'Ocupada', limpiadaHoy: true, necesita: null });
+      await http.post(`/api/gestion/limpieza/${fin.id}/terminar`).set(R()).send({}).expect(409);
+    });
+
+    it('servicio diario, marcado rápido y anulación', async () => {
+      const s = (await http.post('/api/gestion/limpieza').set(R()).send({ habitacionId: l01, tipo: 'Servicio', asignadaA: 'Rosa', iniciar: true }).expect(201)).body;
+      expect(s).toMatchObject({ estado: 'EnCurso', tipo: 'Servicio', mensaje: 'Servicio diario de la habitación L01 en curso.' });
+      await http.patch(`/api/gestion/habitaciones/${l01}/limpieza`).set(R()).send({ estadoLimpieza: 'Limpia' }).expect(200);
+      const [t] = await db().query<any>('SELECT estado, terminada_por FROM limpiezas WHERE id = $1', [s.id]);
+      expect(t).toEqual({ estado: 'Terminada', terminadaPor: 'Recepción' });
+      const p = (await http.post('/api/gestion/limpieza').set(R()).send({ habitacionId: l02, tipo: 'Profunda', iniciar: true }).expect(201)).body;
+      await http.post(`/api/gestion/limpieza/${p.id}/anular`).set(R()).expect(200);
+      expect((await habs()).find((h: any) => h.id === l02)).toMatchObject({ estadoLimpieza: 'Sucia', tareaId: null });
+      await http.patch(`/api/gestion/habitaciones/${l02}/limpieza`).set(R()).send({ estadoLimpieza: 'Limpia' }).expect(200);
+    });
+
+    it('una orden que bloquea la habitación la saca de la venta, del panel y del cambio de habitación hasta resolverla', async () => {
+      const orden = (x: object) => http.post('/api/gestion/mantenimiento').set(R()).send({ categoria: 'AireAcondicionado', descripcion: 'No enfría', prioridad: 'Alta', ...x });
+      expect((await orden({}).expect(400)).body.campo).toBe('habitacionId');
+      expect((await orden({ area: 'Piscina', bloquea: true, bloqueoDesde: d(5), bloqueoHasta: d(8) }).expect(400)).body.campo).toBe('bloquea');
+      expect((await orden({ habitacionId: l01, bloquea: true, bloqueoDesde: hoy, bloqueoHasta: d(3) }).expect(409)).body.mensaje)
+        .toBe(`La habitación L01 tiene reservas en esas fechas (${codigoLlega}). Cámbialas de habitación desde su ficha antes de bloquearla.`);
+
+      const antes = await dunasLibres(5, 8);
+      const o = (await orden({ habitacionId: l01, bloquea: true, bloqueoDesde: d(5), bloqueoHasta: d(8), asignadoA: 'Frío Sur SAC' }).expect(201)).body;
+      expect(await dunasLibres(5, 8)).toBe(antes - 1);
+      expect((await http.post('/api/gestion/reservas').set(R()).send({ clienteId: 1, tipoHabitacion: 'duna', habitacionId: l01, fechaEntrada: d(6), fechaSalida: d(7),
+        huespedes: 1, residencia: 'PE', canal: 'Telefono' }).expect(409)).body.campo).toBe('habitacionId');
+      const otra = await reservaPanel({ tipoHabitacion: 'duna', huespedes: 1, fechaEntrada: d(6), fechaSalida: d(7) });
+      expect((await http.get(`/api/gestion/reservas/${otra.codigo}/cambio-habitacion`).set(R())).body.opciones.map((h: any) => h.id)).not.toContain(l01);
+      expect((await http.post(`/api/gestion/reservas/${otra.codigo}/cambiar-habitacion`).set(R()).send({ habitacionId: l01, tarifa: 'Mantener', motivo: 'Prueba de bloqueo' }).expect(409)).body.mensaje)
+        .toBe('La habitación L01 está bloqueada por mantenimiento en esas fechas.');
+
+      // El día «hasta» ya se vende; ampliar el bloqueo sobre esa reserva se rechaza, editar sin mover fechas no revisa nada
+      const despues = await reservaPanel({ tipoHabitacion: 'duna', huespedes: 1, habitacionId: l01, fechaEntrada: d(8), fechaSalida: d(9) });
+      const editar = (x: object) => http.put(`/api/gestion/mantenimiento/${o.id}`).set(R()).send({ habitacionId: l01, categoria: 'AireAcondicionado', descripcion: 'No enfría', prioridad: 'Alta', bloquea: true, bloqueoDesde: d(5), ...x });
+      expect((await editar({ bloqueoHasta: d(10) }).expect(409)).body.mensaje).toContain(despues.codigo);
+      await editar({ bloqueoHasta: d(8), descripcion: 'No enfría ni calienta' }).expect(200);
+
+      // Bloqueo de hoy en otra habitación: el tablero la muestra en mantenimiento
+      const hoyO = (await orden({ habitacionId: l02, prioridad: 'Urgente', bloquea: true, bloqueoDesde: hoy, bloqueoHasta: d(1) }).expect(201)).body;
+      expect((await habs()).find((h: any) => h.id === l02)).toMatchObject({ situacion: 'Mantenimiento', bloqueada: true, mantenimientosAbiertos: 1 });
+      expect((await http.get('/api/gestion/mantenimiento/resumen').set(R())).body).toMatchObject({ urgentes: 1, bloqueadasHoy: 1 });
+      expect((await http.get('/api/gestion/mantenimiento').set(R())).body[0].id).toBe(hoyO.id);   // urgentes primero
+
+      await http.post(`/api/gestion/mantenimiento/${o.id}/iniciar`).set(R()).expect(200);
+      const conBloqueo = await dunasLibres(5, 8);
+      expect((await http.post(`/api/gestion/mantenimiento/${o.id}/resolver`).set(R()).send({ solucion: 'Se recargó el gas', costo: 120 }).expect(200)).body.mensaje)
+        .toBe(`Orden N.° ${o.id} resuelta. La habitación L01 quedó por limpiar.`);
+      expect(await dunasLibres(5, 8)).toBe(conBloqueo + 1);
+      expect((await http.get(`/api/gestion/mantenimiento/${o.id}`).set(R())).body).toMatchObject({ estado: 'Resuelto', costo: 120, bloqueoHasta: d(5), cerradoPor: 'Recepción' });
+      expect((await plan()).habitaciones.find((h: any) => h.id === l01)).toMatchObject({ estadoLimpieza: 'Sucia', tareaTipo: 'Profunda' });
+      await http.post(`/api/gestion/mantenimiento/${o.id}/cancelar`).set(R()).send({ motivo: 'Ya estaba resuelta' }).expect(409);
+      expect((await http.post(`/api/gestion/mantenimiento/${hoyO.id}/cancelar`).set(R()).send({ motivo: 'x' }).expect(400)).body.campo).toBe('motivo');
+      await http.post(`/api/gestion/mantenimiento/${hoyO.id}/cancelar`).set(R()).send({ motivo: 'Era otra habitación' }).expect(200);
+      expect((await habs()).find((h: any) => h.id === l02).situacion).toBe('Libre');
+      const cerradas = (await http.get(`/api/gestion/mantenimiento?vista=cerradas&desde=${hoy}&hasta=${hoy}`).set(R())).body;
+      expect(cerradas.map((m: any) => m.id)).toEqual(expect.arrayContaining([o.id, hoyO.id]));
+    });
+
+    it('CONCURRENCIA: un bloqueo y una reserva compiten por la última suite libre y gana solo uno', async () => {
+      for (let i = 0; i < 3; i++) await reservaPanel({ tipoHabitacion: 'pleamar', fechaEntrada: d(400), fechaSalida: d(401) });
+      const libre = (await db().query<any>(`SELECT h.id FROM habitaciones h JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id WHERE t.codigo = 'pleamar'
+        AND NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.fecha_entrada = $1 AND r.estado = 'Confirmada')`, [d(400)]))[0].id;
+      const [bloqueo, reserva] = await Promise.all([
+        http.post('/api/gestion/mantenimiento').set(A()).send({ habitacionId: libre, categoria: 'Pintura', descripcion: 'Pintar la terraza', prioridad: 'Baja', bloquea: true, bloqueoDesde: d(400), bloqueoHasta: d(401) }),
+        http.post('/api/gestion/reservas').set(R()).send({ clienteId: 1, tipoHabitacion: 'pleamar', fechaEntrada: d(400), fechaSalida: d(401), huespedes: 2, residencia: 'PE', canal: 'Telefono' })]);
+      expect([bloqueo.status, reserva.status].sort()).toEqual([201, 409]);
+      const [{ n }] = await db().query<any>(`SELECT count(*) AS n FROM reservas r WHERE r.habitacion_id = $1 AND r.fecha_entrada = $2 AND r.estado = 'Confirmada'`, [libre, d(400)]);
+      expect(n).toBe(bloqueo.status === 201 ? 0 : 1);
     });
   });
 });

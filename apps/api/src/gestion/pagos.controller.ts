@@ -36,7 +36,7 @@ export class PagosController {
       return a;
     }, {})).sort((a: any, b: any) => b.monto - a.monto);
     // Devoluciones del periodo (por fecha en que se completaron o se pidieron)
-    const devoluciones = await this.db.query<any>(`SELECT dv.id, dv.pago_id, r.codigo AS codigo_reserva, c.nombres || ' ' || c.apellidos AS cliente, dv.monto, dv.motivo, dv.medio,
+    const devoluciones = await this.db.query<any>(`SELECT dv.id, dv.pago_id, r.codigo AS codigo_reserva, c.nombres || ' ' || c.apellidos AS cliente, dv.monto, dv.monto_dolares, dv.motivo, dv.medio,
       dv.pasarela, dv.estado, dv.mensaje, dv.reduce_total, dv.registrado_por, dv.fecha, dv.fecha_resultado, p.metodo
       FROM devoluciones dv JOIN pagos p ON p.id = dv.pago_id JOIN reservas r ON r.id = dv.reserva_id JOIN clientes c ON c.id = r.cliente_id
       WHERE (coalesce(dv.fecha_resultado, dv.fecha) AT TIME ZONE 'America/Lima') >= $1::date AND (coalesce(dv.fecha_resultado, dv.fecha) AT TIME ZONE 'America/Lima') < $2::date

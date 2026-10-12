@@ -31,16 +31,19 @@ import { ReservasService } from './reservas/reservas.service';
 import { ConsumosController } from './gestion/consumos.controller';
 import { TurnosController } from './gestion/turnos.controller';
 import { TurnosCaja } from './pagos/turnos.service';
+import { LimpiezaController, MantenimientoController } from './gestion/operacion.controller';
+import { Limpieza } from './operacion/limpieza.service';
+import { Mantenimiento } from './operacion/mantenimiento.service';
 
 const CONTROLADORES = [PublicoController, AuthController, ReservasGestionController, HabitacionesController, ClientesController,
   PagosController, MetricasController, AdminController, BitacoraController, PagosEnLineaController, FacturacionController,
-  CorreosController, EncuestasController, ConsumosController, TurnosController];
+  CorreosController, EncuestasController, ConsumosController, TurnosController, LimpiezaController, MantenimientoController];
 
 @Module({
   imports: [JwtModule.register({})],
   controllers: CONTROLADORES,
   providers: [Db, AuthService, ReservasService, SesionGuard, Bitacora, Correos, PagosService, PagosEnLinea, Facturacion,
-    Devoluciones, CorreosProgramados, TurnosCaja,
+    Devoluciones, CorreosProgramados, TurnosCaja, Limpieza, Mantenimiento,
     { provide: APP_GUARD, useClass: LimiteGuard },
     { provide: APP_FILTER, useClass: FiltroErrores }]
 })

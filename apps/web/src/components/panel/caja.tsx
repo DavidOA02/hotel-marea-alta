@@ -37,6 +37,10 @@ export function Diferencia({ valor, moneda = 'PEN' }: { valor: number | null | u
   return <span className={`font-medium ${valor < 0 ? 'text-bad' : 'text-warn'}`}>{valor < 0 ? 'Faltan' : 'Sobran'} {f(Math.abs(valor))}</span>;
 }
 
+/** Monto devuelto en soles y, si el pago fue en dólares, los dólares entregados. */
+export const MontoDevuelto = ({ monto, montoDolares }: { monto: number; montoDolares?: number | null }) =>
+  <span className="text-bad">−{soles(monto)}{montoDolares != null && <span className="block text-xs">{dolares(montoDolares)} entregados</span>}</span>;
+
 /** De dónde sale el efectivo esperado: fondo + cobros − devoluciones + ingresos − retiros. */
 export function DesgloseEfectivo({ turno }: { turno: any }) {
   const r = turno.resumen;
@@ -45,7 +49,7 @@ export function DesgloseEfectivo({ turno }: { turno: any }) {
   const filas: [string, number, number][] = [
     ['Fondo inicial', turno.fondoInicial, 0],
     ['+ Cobros en efectivo', efectivo?.soles ?? 0, efectivo?.dolares ?? 0],
-    ['− Devoluciones en efectivo', efectivo?.devuelto ?? 0, 0],
+    ['− Devoluciones en efectivo', r.devolucionesEfectivo.soles, r.devolucionesEfectivo.dolares],
     ['+ Ingresos de efectivo', r.ingresos.soles, r.ingresos.dolares],
     ['− Retiros de efectivo', r.retiros.soles, r.retiros.dolares]
   ];
@@ -204,7 +208,7 @@ export function MiTurno() {
     <section aria-label="Mi turno de caja" className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-dashed border-gold bg-gold-soft p-5 print:hidden">
       <div className="flex items-start gap-3"><Vault className="mt-0.5 size-6 shrink-0 text-gold-dark" aria-hidden />
         <div><h2 className="font-medium">No tienes un turno de caja abierto</h2>
-          <p className="text-sm text-muted">Ábrelo con el fondo inicial para cobrar en efectivo. Al terminar, cuenta la caja y ciérralo con el arqueo.</p></div></div>
+          <p className="text-sm text-muted">Ábrelo con el fondo inicial para registrar cobros. Al terminar, cuenta la caja y ciérralo con el arqueo.</p></div></div>
       <BotonP variante="oro" onClick={abrir}><LockKeyholeOpen className="size-4" />Abrir turno</BotonP>
     </section>
   );
@@ -242,7 +246,7 @@ export function TurnoChip() {
   const { turno, cargado } = useTurno();
   if (!cargado) return <span className="ml-auto" aria-hidden />;
   return (
-    <Link href="/panel/caja" title={turno ? `Efectivo esperado: ${soles(turno.resumen.esperado.soles)}` : 'Abre tu turno de caja para cobrar en efectivo'}
+    <Link href="/panel/caja" title={turno ? `Efectivo esperado: ${soles(turno.resumen.esperado.soles)}` : 'Abre tu turno de caja para registrar cobros'}
       className={`ml-auto hidden items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm md:flex ${turno ? 'border-ok/30 bg-ok-bg text-ok' : 'border-line bg-white text-muted hover:bg-sand'}`}>
       <Vault className="size-4" aria-hidden />{turno ? `Turno de caja N.° ${turno.id}` : 'Sin turno de caja'}
     </Link>

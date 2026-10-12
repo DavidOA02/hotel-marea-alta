@@ -148,7 +148,7 @@ export function FormularioPago() {
   const [general, setGeneral] = useState<string | null>(null);
   const { register, handleSubmit, watch, setValue, setError, reset, formState: { errors, isSubmitting } } = useForm<PagoInput, unknown, any>({ resolver: zodResolver(pagoSchema) });
   useEffect(() => { if (r) { reset({ monto: Number(r.saldo.toFixed(2)), moneda: 'PEN', metodo: 'Tarjeta', tipoCambio: TIPO_CAMBIO, referencia: '' }); setGeneral(null); } }, [r, reset]);
-  const moneda = watch('moneda'), metodo = watch('metodo');
+  const moneda = watch('moneda');
   const { turno, cargado } = useTurno(!!r);
   useEffect(() => { if (r) setValue('monto', Number((moneda === 'USD' ? r.saldo / TIPO_CAMBIO : r.saldo).toFixed(2))); }, [moneda, r, setValue]);
   const enviar = handleSubmit(async d => {
@@ -170,7 +170,7 @@ export function FormularioPago() {
           <Campo etiqueta="Método" error={errors.metodo?.message}><select {...register('metodo')}>{METODOS_PAGO.map(m => <option key={m}>{m}</option>)}</select></Campo>
           <Campo etiqueta="Referencia (opcional)" className="sm:col-span-2" ayuda="N.° de operación de Yape, Plin o transferencia, o voucher."><input {...register('referencia')} maxLength={60} /></Campo>
         </div>
-        {cargado && !turno && metodo === 'Efectivo' && <AvisoTurno texto="Para cobrar en efectivo abre tu turno de caja." />}
+        {cargado && !turno && <AvisoTurno texto="Para registrar cobros abre tu turno de caja." />}
         {turno && <p className="text-xs text-muted">Se registrará en tu turno de caja N.° {turno.id}.</p>}
       </form>}
     </Modal>

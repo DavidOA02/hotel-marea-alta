@@ -1,6 +1,6 @@
 import { urlWeb } from '../config/env';
 import { HOTEL } from '../config/hotel';
-import { boton, esc, marco, pie, soles, tabla, textoTabla } from './plantillas';
+import { boton, dolares, esc, importeDevuelto, marco, pie, soles, tabla, textoTabla } from './plantillas';
 import type { ComprobanteCorreo, Mensaje, ReclamoCorreo, ReservaCorreo } from './plantillas';
 
 const fecha = (iso: string) => new Intl.DateTimeFormat('en-GB', { dateStyle:'full', timeZone:'UTC' }).format(new Date(iso.slice(0,10)+'T12:00:00Z'));
@@ -36,9 +36,9 @@ export function encuesta(r:ReservaCorreo,token:string) {
   return mensaje(`How was your stay at ${HOTEL.nombre}?`, 'Thank you for your visit', saludo(r), [['Booking',r.codigo]],
     'We hope you enjoyed Paracas. Help us improve by answering two questions. It takes less than a minute.', {texto:'Answer the survey',url:`${urlWeb()}/encuesta?token=${encodeURIComponent(token)}`});
 }
-export function devolucion(r:ReservaCorreo,d:{ monto:number; medio:string; pasarela:string|null; metodo:string; motivo:string }) {
-  return mensaje(`Refund of ${soles(d.monto)} · Booking ${r.codigo}`, 'Your refund is confirmed', saludo(r),
-    [['Booking',r.codigo],['Refund amount',soles(d.monto)],['Reason',d.motivo]], d.medio === 'Pasarela' ? `Refunded to your original payment method through ${d.pasarela}. Your bank may take a few business days to show it on your statement.` : 'We recorded the refund delivered by the hotel.');
+export function devolucion(r:ReservaCorreo,d:{ monto:number; montoDolares?:number|null; medio:string; pasarela:string|null; metodo:string; motivo:string }) {
+  return mensaje(`Refund of ${d.montoDolares != null ? dolares(d.montoDolares) : soles(d.monto)} · Booking ${r.codigo}`, 'Your refund is confirmed', saludo(r),
+    [['Booking',r.codigo],['Refund amount',importeDevuelto(d)],['Reason',d.motivo]], d.medio === 'Pasarela' ? `Refunded to your original payment method through ${d.pasarela}. Your bank may take a few business days to show it on your statement.` : 'We recorded the refund delivered by the hotel.');
 }
 export function comprobante(c:ComprobanteCorreo) {
   const nombre = ({'01':'Electronic invoice','03':'Electronic sales receipt','07':'Electronic credit note','08':'Electronic debit note'} as Record<string,string>)[c.tipo] ?? 'Electronic document';
