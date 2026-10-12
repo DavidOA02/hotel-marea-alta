@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { diasEntre, dividir, Estadia, hoyLima, redondear, sumarDias, sumarEstadias } from '@marea/shared';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { Roles, SesionGuard } from '../auth/guards';
 import { SQL_RESERVA } from '../reservas/reservas.service';
 
@@ -73,7 +74,7 @@ export class MetricasController {
   @Get('reportes') @Roles('Administrador')
   async reportes(@Query('desde') desde?: string, @Query('hasta') hasta?: string) {
     const hoy = hoyLima();
-    const d = desde || sumarDias(hoy, -29), h = hasta || hoy;
+    const d = fechaFiltro(desde, 'desde') || sumarDias(hoy, -29), h = fechaFiltro(hasta, 'hasta') || hoy;
     if (h < d) throw falla(400, 'La fecha final debe ser posterior a la inicial.', 'hasta');
     if (diasEntre(d, h) > 731) throw falla(400, 'El rango máximo es de 2 años.', 'hasta');
     const hx = sumarDias(h, 1), dias = diasEntre(d, hx);

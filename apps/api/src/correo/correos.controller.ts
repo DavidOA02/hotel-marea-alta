@@ -1,11 +1,10 @@
 import { Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { hoyLima, sumarDias } from '@marea/shared';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { SesionGuard } from '../auth/guards';
 import { Bitacora } from '../auditoria/bitacora.service';
 import { Correos } from './correos.service';
-
-const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Panel de correos: seguimiento de la bandeja de salida, vista previa y reintentos. */
 @Controller('gestion/correos')
@@ -16,8 +15,7 @@ export class CorreosController {
   @Get()
   listar(@Query('estado') estado?: string, @Query('tipo') tipo?: string, @Query('desde') desde?: string, @Query('hasta') hasta?: string,
          @Query('buscar') buscar?: string, @Query('limite') limite = '500') {
-    const h = hasta || hoyLima(), d = desde || sumarDias(h, -6);
-    if (!FECHA.test(d) || !FECHA.test(h)) throw falla(400, 'Fecha no válida.', 'desde');
+    const h = fechaFiltro(hasta, 'hasta') || hoyLima(), d = fechaFiltro(desde, 'desde') || sumarDias(h, -6);
     if (h < d) throw falla(400, 'La fecha final debe ser posterior a la inicial.', 'hasta');
     return this.correos.buscar({ estado, tipo, desde: d, hastaExcl: sumarDias(h, 1), buscar, limite: Math.min(Math.max(Number(limite) || 500, 1), 2000) });
   }

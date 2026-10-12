@@ -3,6 +3,7 @@ import { anularPagoSchema, devolucionSchema, hoyLima, redondear, sumarDias } fro
 import { z } from 'zod';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
+import { fechaFiltro } from '../comun/filtros';
 import { ZodPipe } from '../comun/zod.pipe';
 import { UsuarioSesion } from '../auth/auth.service';
 import { Roles, SesionGuard, Usuario } from '../auth/guards';
@@ -18,8 +19,8 @@ export class PagosController {
 
   @Get()
   async listar(@Query('desde') desde?: string, @Query('hasta') hasta?: string, @Query('metodo') metodo?: string) {
-    const d = desde || hoyLima();
-    const h = hasta || d;
+    const d = fechaFiltro(desde, 'desde') || hoyLima();
+    const h = fechaFiltro(hasta, 'hasta') || d;
     if (h < d) throw falla(400, 'La fecha final debe ser posterior a la inicial.', 'hasta');
     const p: unknown[] = [d, sumarDias(h, 1)];
     let extra = '';

@@ -964,4 +964,36 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(n).toBe(bloqueo.status === 201 ? 0 : 1);
     });
   });
+
+  describe('Auditoría: ocupación y filtros', () => {
+    it('no aloja a otro huésped en una habitación cuyo ocupante aún no hizo check-out', async () => {
+      const x = (await http.post('/api/gestion/habitaciones').set(A()).send({ numero: 'X01', piso: 0, tipoHabitacion: 'duna', estado: 'Operativa' }).expect(201)).body.id;
+      await db().query(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total, estado, canal, fecha_check_in)
+        VALUES ('MA9900301', 1, $1, $2, $3, 1, 762.71, 137.29, 900, 'CheckIn', 'Web', now() - interval '2 day')`, [x, d(-2), hoy]);
+      // El walk-in con check-in inmediato no recibe X01 (es la primera duna por piso) aunque sus fechas no se crucen
+      const walkIn = { tipoHabitacion: 'duna', huespedes: 1, fechaEntrada: hoy, fechaSalida: d(1), checkInInmediato: true };
+      expect((await reservaPanel(walkIn)).habitacion).not.toBe('X01');
+      await http.post('/api/gestion/reservas').set(R()).send({ clienteId: 1, residencia: 'PE', canal: 'Recepcion', ...walkIn, habitacionId: x }).expect(409);
+      // Una reserva para hoy sí se acepta (el ocupante sale hoy), pero el check-in espera a su check-out
+      const llega = (await reservaPanel({ tipoHabitacion: 'duna', huespedes: 1, habitacionId: x, fechaEntrada: hoy, fechaSalida: d(1) })).codigo;
+      const ci = await http.post(`/api/gestion/reservas/${llega}/checkin`).set(R()).send({}).expect(409);
+      expect(ci.body.mensaje).toBe(`La habitación X01 sigue ocupada por la reserva MA9900301 (salida prevista el ${hoy.split('-').reverse().join('/')}). Registra primero su check-out o cambia esta reserva de habitación.`);
+      await http.post('/api/gestion/reservas/MA9900301/checkout').set(A()).send({ forzarConSaldo: true }).expect(200);
+      await http.post(`/api/gestion/reservas/${llega}/checkin`).set(R()).send({}).expect(200);
+    });
+
+    it('fechas imposibles en filtros y formularios responden 400, no 500', async () => {
+      for (const ruta of ['/api/gestion/reservas?desde=2026-02-30', '/api/gestion/pagos?hasta=2026-13-01', '/api/gestion/reportes?desde=abc',
+        '/api/gestion/turnos?desde=2026-02-30', '/api/gestion/comprobantes?hasta=2026-02-31', '/api/gestion/mantenimiento?vista=cerradas&desde=2026-04-31',
+        '/api/gestion/bitacora?desde=2026-02-30', '/api/gestion/correos?hasta=x', '/api/gestion/encuestas?desde=2026-06-31']) {
+        const r = await http.get(ruta).set(A());
+        expect([ruta, r.status, r.body.mensaje]).toEqual([ruta, 400, 'Fecha no válida.']);
+      }
+      const anio = Number(hoy.slice(0, 4)) + 1;
+      expect((await http.get(`/api/disponibilidad?entrada=${anio}-02-30&salida=${anio}-03-02`).expect(400)).body.campo).toBe('fechaEntrada');
+      expect((await http.post('/api/reservas').send(huesped(900, { fechaEntrada: `${anio}-02-30`, fechaSalida: `${anio}-03-02` })).expect(400)).body.campo).toBe('fechaEntrada');
+      // Un id fuera del rango de PostgreSQL es un dato no válido, no un error del servidor
+      await http.get('/api/gestion/clientes/99999999999').set(R()).expect(400);
+    });
+  });
 });

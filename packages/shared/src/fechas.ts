@@ -11,6 +11,13 @@ export function ahoraLima(ahora: Date = new Date()): Date {
 const aUTC = (iso: string) => new Date(iso + 'T00:00:00Z');
 const aISO = (d: Date) => d.toISOString().slice(0, 10);
 
+/** AAAA-MM-DD que existe en el calendario (rechaza 2026-02-30 y 2026-13-01). */
+export function esFechaIso(v: unknown): v is string {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = aUTC(v);
+  return !isNaN(d.getTime()) && aISO(d) === v;
+}
+
 export function sumarDias(iso: string, n: number): string {
   const d = aUTC(iso);
   d.setUTCDate(d.getUTCDate() + n);

@@ -12,7 +12,9 @@ async function iniciar() {
     origin: (process.env.CORS_ORIGENES || 'http://localhost:3000,http://127.0.0.1:3000').split(',').map(s => s.trim()),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization']
   });
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  // Proxies de confianza para la IP real (TRUST_PROXY: número de saltos, false o lista de IP/subredes). Por defecto, uno.
+  const proxy = (process.env.TRUST_PROXY ?? '1').trim();
+  app.getHttpAdapter().getInstance().set('trust proxy', proxy === 'false' ? false : /^\d+$/.test(proxy) ? Number(proxy) : proxy);
   const puerto = Number(process.env.PUERTO || 4000);
   await app.listen(puerto);
   const log = new Logger('API');

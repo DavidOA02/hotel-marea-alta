@@ -48,6 +48,7 @@ El primer ingreso obliga a cambiar la contraseña. El recuadro «Usuarios de pru
 | `npm run db:migrar` | Aplica `database/03_mejoras.sql` a la base existente **sin borrar datos** (se puede repetir) |
 | `npm test` | Pruebas Jest unitarias (paquete compartido y API) |
 | `npm run test:e2e` | Pruebas de punta a punta de la API contra una base PostgreSQL de prueba |
+| `npm run tipos -w @marea/web` | Revisa los tipos de TypeScript de la web sin compilarla |
 | `npm run build` y luego `npm start` | Compilación de producción y arranque |
 
 ---
@@ -351,6 +352,7 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
   - Define `JWT_SECRETO` y `JWT_SECRETO_RENOVACION` (textos largos y aleatorios; la API no arranca en producción sin ellos), las variables `PG*` y `CORS_ORIGENES`.
   - Define también `WEB_URL`, `API_URL_PUBLICA`, `SMTP_*`, `PASARELA` con sus credenciales y `FACTURACION` con las de Nubefact.
   - Con `NODE_ENV=production` no se activan la pasarela ni el OSE simulados.
+  - `TRUST_PROXY` (por defecto `1`) indica cuántos proxies hay delante. Detrás de Render o nginx deja `1`; si la API recibe las conexiones directamente, pon `false`. Si no, cualquiera puede elegir su IP con `X-Forwarded-For`, saltarse el límite de intentos y dejar una IP falsa en la bitácora.
 - **Base de datos**: cualquier PostgreSQL 14+ con permiso para `CREATE EXTENSION btree_gist`.
 - **Usuarios**: cambia las contraseñas iniciales.
 
