@@ -13,6 +13,9 @@
 SET client_encoding = 'UTF8';
 SET client_min_messages = warning;
 
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS idioma varchar(2) CHECK (idioma IN ('es','en'));
+ALTER TABLE reclamaciones ADD COLUMN IF NOT EXISTS idioma varchar(2) NOT NULL DEFAULT 'es' CHECK (idioma IN ('es','en'));
+
 -- ---------------------------------------------------------------------
 -- 1. Bitácora de auditoría: quién hizo qué, cuándo y desde qué IP
 -- ---------------------------------------------------------------------
@@ -132,14 +135,14 @@ ALTER TABLE pagos ADD COLUMN IF NOT EXISTS pasarela varchar(20);
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS series_comprobante (
   serie   varchar(4)  PRIMARY KEY CHECK (serie ~ '^[FB][A-Z0-9]{3}$'),
-  tipo    varchar(2)  NOT NULL CONSTRAINT ck_series_tipo CHECK (tipo IN ('01','03','07')),
+  tipo    varchar(2)  NOT NULL CONSTRAINT ck_series_tipo CHECK (tipo IN ('01','03','07','08')),
   ultimo  int         NOT NULL DEFAULT 0 CHECK (ultimo >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS comprobantes (
   id                 int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   reserva_id         int           NOT NULL REFERENCES reservas(id),
-  tipo               varchar(2)    NOT NULL CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('01','03','07')),   -- catálogo 01: 01 factura, 03 boleta, 07 nota de crédito
+  tipo               varchar(2)    NOT NULL CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('01','03','07','08')),   -- catálogo 01: 01 factura, 03 boleta, 07 crédito, 08 débito
   referencia_id      int           REFERENCES comprobantes(id),                -- nota de crédito: comprobante que modifica
   motivo_nota        varchar(2),                                               -- catálogo 09: 01 anulación, 02 error en el RUC, 06 devolución total, 09 disminución en el valor
   sustento           varchar(250),
@@ -175,7 +178,7 @@ CREATE TABLE IF NOT EXISTS comprobantes (
   fecha_anulacion    timestamptz,
   UNIQUE (serie, numero),
   CHECK (total = gravada + exportacion + igv),
-  CONSTRAINT ck_nota_referencia CHECK ((tipo = '07') = (referencia_id IS NOT NULL AND motivo_nota IS NOT NULL))
+  CONSTRAINT ck_nota_referencia CHECK ((tipo IN ('07','08')) = (referencia_id IS NOT NULL AND motivo_nota IS NOT NULL))
 );
 
 -- Bases creadas antes de las notas de crédito
@@ -186,12 +189,12 @@ ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS sustento varchar(250);
 ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS anulado_con_nota_id int REFERENCES comprobantes(id);
 ALTER TABLE comprobantes DROP CONSTRAINT IF EXISTS comprobantes_tipo_check;
 ALTER TABLE comprobantes DROP CONSTRAINT IF EXISTS ck_comprobantes_tipo;
-ALTER TABLE comprobantes ADD CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('01','03','07'));
+ALTER TABLE comprobantes ADD CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('01','03','07','08'));
 ALTER TABLE comprobantes DROP CONSTRAINT IF EXISTS ck_nota_referencia;
-ALTER TABLE comprobantes ADD CONSTRAINT ck_nota_referencia CHECK ((tipo = '07') = (referencia_id IS NOT NULL AND motivo_nota IS NOT NULL));
+ALTER TABLE comprobantes ADD CONSTRAINT ck_nota_referencia CHECK ((tipo IN ('07','08')) = (referencia_id IS NOT NULL AND motivo_nota IS NOT NULL));
 ALTER TABLE series_comprobante DROP CONSTRAINT IF EXISTS series_comprobante_tipo_check;
 ALTER TABLE series_comprobante DROP CONSTRAINT IF EXISTS ck_series_tipo;
-ALTER TABLE series_comprobante ADD CONSTRAINT ck_series_tipo CHECK (tipo IN ('01','03','07'));
+ALTER TABLE series_comprobante ADD CONSTRAINT ck_series_tipo CHECK (tipo IN ('01','03','07','08'));
 
 CREATE INDEX IF NOT EXISTS ix_comprobantes_reserva    ON comprobantes (reserva_id);
 CREATE INDEX IF NOT EXISTS ix_comprobantes_fecha      ON comprobantes (fecha_emision);
@@ -199,12 +202,12 @@ CREATE INDEX IF NOT EXISTS ix_comprobantes_referencia ON comprobantes (referenci
 -- Una reserva tiene como máximo una boleta o factura vigente (no cuentan notas de crédito, rechazados, anulados ni los neutralizados por nota de crédito)
 DROP INDEX IF EXISTS ux_comprobante_vigente;
 CREATE UNIQUE INDEX ux_comprobante_vigente ON comprobantes (reserva_id)
-  WHERE estado NOT IN ('Rechazado','Anulado') AND tipo <> '07' AND anulado_con_nota_id IS NULL;
+  WHERE estado NOT IN ('Rechazado','Anulado') AND tipo IN ('01','03') AND anulado_con_nota_id IS NULL;
 
 -- Registro de ventas para Power BI (las notas de crédito restan en total_neto)
 DROP VIEW IF EXISTS vw_comprobantes_powerbi;
 CREATE VIEW vw_comprobantes_powerbi AS
-SELECT c.id AS comprobante_id, CASE c.tipo WHEN '01' THEN 'Factura' WHEN '03' THEN 'Boleta' ELSE 'Nota de crédito' END AS tipo, c.serie, c.numero,
+SELECT c.id AS comprobante_id, CASE c.tipo WHEN '01' THEN 'Factura' WHEN '03' THEN 'Boleta' WHEN '08' THEN 'Nota de débito' ELSE 'Nota de crédito' END AS tipo, c.serie, c.numero,
        c.serie || '-' || c.numero AS comprobante, c.fecha_emision, c.tipo_operacion, c.cliente_tipo_doc, c.cliente_num_doc,
        c.cliente_nombre, c.gravada, c.exportacion, c.igv, c.total, c.estado, c.proveedor, r.codigo AS codigo_reserva,
        ref.serie || '-' || ref.numero AS modifica, c.motivo_nota,
@@ -233,6 +236,29 @@ CREATE TABLE IF NOT EXISTS devoluciones (
 );
 CREATE INDEX IF NOT EXISTS ix_devoluciones_pago    ON devoluciones (pago_id);
 CREATE INDEX IF NOT EXISTS ix_devoluciones_reserva ON devoluciones (reserva_id);
+
+-- Evita volver a registrar una devolución Niubiz si se perdió la respuesta HTTP.
+ALTER TABLE devoluciones ADD COLUMN IF NOT EXISTS solicitud_enviada boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_devolucion_niubiz_codigo ON devoluciones(referencia_externa)
+  WHERE pasarela = 'Niubiz' AND medio = 'Pasarela' AND referencia_externa IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS consumos (
+  id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  reserva_id int NOT NULL REFERENCES reservas(id),
+  categoria varchar(20) NOT NULL CHECK (categoria IN ('Restaurante','Bar','Tour','Minibar','LateCheckout','Otro')),
+  descripcion varchar(200) NOT NULL,
+  cantidad int NOT NULL CHECK (cantidad BETWEEN 1 AND 1000),
+  precio_unitario numeric(10,2) NOT NULL CHECK (precio_unitario > 0),
+  subtotal numeric(10,2) NOT NULL CHECK (subtotal >= 0),
+  igv numeric(10,2) NOT NULL CHECK (igv >= 0),
+  total numeric(10,2) NOT NULL CHECK (total > 0 AND total = subtotal + igv),
+  comprobante_id int REFERENCES comprobantes(id),
+  estado varchar(10) NOT NULL DEFAULT 'Activo' CHECK (estado IN ('Activo','Anulado')),
+  registrado_por varchar(100) NOT NULL,
+  fecha timestamptz NOT NULL DEFAULT now(),
+  motivo_anulacion varchar(200)
+);
+CREATE INDEX IF NOT EXISTS ix_consumos_reserva ON consumos(reserva_id);
 
 -- Lo pagado de una reserva en un solo lugar: pagos aprobados menos devoluciones completadas
 CREATE OR REPLACE FUNCTION pagado_neto(p_reserva int) RETURNS numeric LANGUAGE sql STABLE AS $$

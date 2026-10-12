@@ -1,5 +1,5 @@
 import { createHmac } from 'crypto';
-import { Culqi, ErrorPasarela, firmaMercadoPagoValida, MercadoPago, Niubiz, Orden, Resultado } from './pasarelas';
+import { Culqi, ErrorDevolucionNoEnviada, ErrorPasarela, firmaMercadoPagoValida, MercadoPago, Niubiz, Orden, Resultado } from './pasarelas';
 
 /** Contratos de las pasarelas con fetch simulado: qué se envía y cómo se interpreta cada respuesta. */
 const orden: Orden = { id: '0b7f6a7e-4a43-4c39-9a35-1b2a6f0c9d11', numero: 1234, monto: 900, email: 'ana@correo.pe', codigoReserva: 'MA2600042', titular: 'Ana Quispe', expira: new Date('2026-10-11T20:00:00Z') };
@@ -99,6 +99,31 @@ describe('Mercado Pago', () => {
 });
 
 describe('Niubiz', () => {
+  it('distingue una autenticación fallida de una respuesta perdida después del POST', async () => {
+    respuestas({status:401,texto:'Unauthorized'});
+    await expect(Niubiz.devolver('993203570048588',59,'MA-DEV-8','Prueba')).rejects.toBeInstanceOf(ErrorDevolucionNoEnviada);
+    expect(llamadas).toHaveLength(1);
+    respuestas({status:201,texto:'tok'},{status:503,json:{}});
+    let error: unknown;
+    try { await Niubiz.devolver('993203570048588',59,'MA-DEV-8','Prueba'); } catch (e) { error=e; }
+    expect(error).toBeInstanceOf(ErrorPasarela);
+    expect(error).not.toBeInstanceOf(ErrorDevolucionNoEnviada);
+    expect(llamadas).toHaveLength(2);
+  });
+  it('registra una solicitud parcial sin confundirla con dinero devuelto', async () => {
+    respuestas({status:201,texto:'tok'}, {json:{ errorCode:0, data:{ CODERROR:'100', CODIGODEVOLUCION:'517822', DSCERROR:'Solicitud registrada' } }});
+    expect(await Niubiz.devolver('993203570048588',59,'MA-DEV-8','Consumo duplicado')).toMatchObject({estado:'Pendiente',referencia:'517822'});
+    expect(llamadas[1].url).toBe('https://apisandbox.vnforappstest.com/api.refund/v1/refund/341198210/993203570048588');
+    expect(cuerpo(1)).toEqual({ruc:'20000000000',comment:'Consumo duplicado',externalReferenceId:'MA-DEV-8',amount:59});
+    respuestas({status:201,texto:'tok'}, {status:400,json:{data:{CODERROR:'110',DSCERROR:'Venta no liquidada'}}});
+    expect((await Niubiz.devolver('993203570048588',59,'MA-DEV-8','Consumo duplicado')).estado).toBe('Fallida');
+  });
+  it.each([['P','Pendiente'],['E','Pendiente'],['S','Completada'],['T','Fallida'],['B','Pendiente']])('consulta %s: %s', async (codigo,estado) => {
+    respuestas({status:201,texto:'tok'}, {json:{ data:{ CODERROR:'100', DEVOLUCIONES:JSON.stringify([{ CODIGODEVOLUCION:'517822', ESTADO:codigo, IDTRANSACCION:'993203570048588', IMPORTEDEVUELTO:'59' }]) } }});
+    expect(await Niubiz.consultarDevolucion('517822')).toMatchObject({estado,referencia:'517822',respuesta:{transaccion:'993203570048588',monto:59}});
+    expect(llamadas[1].url).toBe('https://apitestenv.vnforapps.com/api.refund/v1/queryRefund/341198210');
+    expect(cuerpo(1)).toEqual({tipoBusqueda:'01',codigoBusqueda:'517822'});
+  });
   it('token de seguridad (GET con Basic) → sesión → datos del botón de pago', async () => {
     respuestas({ status: 201, texto: 'eyJ.token.jwt' }, { json: { sessionKey: 'abc123', expirationTime: 1602183788142 } });
     const d = await Niubiz.preparar(orden, { ip: '190.1.2.3' });

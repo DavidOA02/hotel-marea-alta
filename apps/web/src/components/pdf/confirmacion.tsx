@@ -80,7 +80,7 @@ export function ConfirmacionPdf({ r }: { r: DatosConfirmacion }) {
         {r.estado ? <Fila k="Estado" v={r.estado === 'CheckIn' ? 'En el hotel' : r.estado === 'CheckOut' ? 'Finalizada' : r.estado} /> : null}
         <View style={e.montos}>
           <Monto k="Valor de venta" v={soles(r.subtotal)} />
-          <Monto k="IGV (18 %)" v={r.exoneradoIgv ? 'Exonerado' : soles(r.igv)} />
+          <Monto k="IGV (18 %)" v={r.exoneradoIgv && r.igv <= 0 ? 'Exonerado' : soles(r.igv)} />
           <Monto k="Total" v={soles(r.total)} estilo={e.total} />
           {r.pagado != null ? <><Monto k="Pagado" v={soles(r.pagado)} /><Monto k="Saldo" v={soles(saldo)} estilo={e.negrita} /></> : null}
         </View>

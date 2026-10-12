@@ -1,4 +1,5 @@
 'use client';
+import { SeccionConsumos } from './consumos';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
@@ -81,11 +82,12 @@ export function FichaReserva() {
           {r.notas && <div className="col-span-2"><dt className="text-xs text-muted">Notas</dt><dd className="mt-0.5">{r.notas}</dd></div>}
         </dl>
         <div className="rounded-xl border border-line bg-[#FAF8F4] p-4 text-sm">
-          {[['Valor de venta', soles(r.subtotal)], ['IGV 18 %', r.exoneradoIgv ? 'Exonerado' : soles(r.igv)]].map(([k, v]) => <div key={k} className="flex justify-between py-0.5"><span>{k}</span><span className="tabular-nums">{v}</span></div>)}
+          {[['Valor de venta', soles(r.subtotal)], ['IGV 18 %', r.exoneradoIgv && r.igv <= 0 ? 'Exonerado' : soles(r.igv)]].map(([k, v]) => <div key={k} className="flex justify-between py-0.5"><span>{k}</span><span className="tabular-nums">{v}</span></div>)}
           <div className="mt-1 flex justify-between border-t border-line pt-2 text-base font-semibold"><span>Total</span><span className="tabular-nums">{soles(r.total)}</span></div>
           <div className="flex justify-between py-0.5"><span>Pagado</span><span className="tabular-nums">{soles(r.pagado)}</span></div>
           <div className={`flex justify-between py-0.5 font-medium ${r.saldo > 0.009 ? 'text-bad' : ''}`}><span>Saldo</span><span className="tabular-nums">{soles(r.saldo)}</span></div>
         </div>
+        <SeccionConsumos r={r} consumos={d.consumos ?? []} alCambiar={recargar} />
         <SeccionPagos r={r} pagos={d.pagos} devoluciones={d.devoluciones} comprobantes={d.comprobantes} alCambiar={recargar} />
         <SeccionComprobantes r={r} comprobantes={d.comprobantes} alCambiar={recargar} />
         <SeccionCorreos r={r} correos={d.correos} alCambiar={recargar} />
@@ -257,6 +259,7 @@ export function FormularioNuevaReserva() {
                 <Campo etiqueta="Documento" error={e.cliente?.tipoDocumento?.message}><select {...register('cliente.tipoDocumento')}><option value="DNI">DNI</option><option value="CE">Carné ext.</option><option value="PAS">Pasaporte</option></select></Campo>
                 <Campo etiqueta="Número" error={e.cliente?.numeroDocumento?.message}><input {...register('cliente.numeroDocumento')} /></Campo>
                 <Campo etiqueta="Correo" className="col-span-2" error={e.cliente?.email?.message}><input type="email" {...register('cliente.email')} /></Campo>
+                <Campo etiqueta="Idioma de correos" className="col-span-2" error={e.cliente?.idioma?.message}><select {...register('cliente.idioma', {setValueAs:v=>v || null})}><option value="">Automático según residencia</option><option value="es">Español</option><option value="en">English</option></select></Campo>
                 <Campo etiqueta="País"><select {...register('cliente.codigoPais')}>{['51', '1', '54', '55', '56', '57', '34', '49'].map(c => <option key={c} value={c}>+{c}</option>)}</select></Campo>
                 <Campo etiqueta="Celular" error={e.cliente?.telefono?.message}><input inputMode="tel" {...register('cliente.telefono')} /></Campo>
               </div>

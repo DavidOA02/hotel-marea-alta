@@ -11,7 +11,7 @@ import { SQL_VIGENTE } from '../facturacion/consultas';
 
 export interface DatosCliente {
   nombres: string; apellidos: string; tipoDocumento: string; numeroDocumento: string;
-  email: string; codigoPais: string; telefono: string;
+  email: string; codigoPais: string; telefono: string; idioma?: 'es' | 'en' | null;
 }
 export interface Solicitud {
   tipoHabitacion: string; habitacionId?: number | null; fechaEntrada: string; fechaSalida: string; huespedes: number;
@@ -34,10 +34,13 @@ export const SQL_LIBRES = `
 export const SQL_RESERVA = `
   SELECT r.id, r.codigo, r.estado, r.canal, r.cliente_id, c.nombres || ' ' || c.apellidos AS cliente,
          c.tipo_documento || ' ' || c.numero_documento AS documento, c.email, '+' || c.codigo_pais || ' ' || c.telefono AS telefono,
-         c.residencia, t.nombre AS tipo_habitacion, t.codigo AS tipo_codigo, r.habitacion_id, h.numero AS habitacion, r.habitacion_desde,
+         c.residencia, coalesce(c.idioma, CASE WHEN c.residencia = 'EXT' THEN 'en' ELSE 'es' END) AS idioma,
+         t.nombre AS tipo_habitacion, t.codigo AS tipo_codigo, r.habitacion_id, h.numero AS habitacion, r.habitacion_desde,
          r.fecha_entrada, r.fecha_salida, r.noches, r.huespedes, r.subtotal, r.igv, r.total, coalesce(p.pagado, 0) AS pagado,
          r.total - coalesce(p.pagado, 0) AS saldo, r.exonerado_igv, r.hora_llegada, r.notas, r.fecha_reserva, r.fecha_check_in,
-         r.fecha_check_out, r.fecha_cancelacion, r.registrado_por
+         r.fecha_check_out, r.fecha_cancelacion, r.registrado_por,
+         coalesce((SELECT sum(a.total) FROM consumos a WHERE a.reserva_id = r.id AND a.estado = 'Activo'),0) AS consumos_total,
+         coalesce((SELECT sum(a.igv) FROM consumos a WHERE a.reserva_id = r.id AND a.estado = 'Activo'),0) AS consumos_igv
   FROM reservas r JOIN clientes c ON c.id = r.cliente_id JOIN habitaciones h ON h.id = r.habitacion_id
   JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
   LEFT JOIN LATERAL (SELECT pagado_neto(r.id) AS pagado) p ON true`;
@@ -87,12 +90,12 @@ export class ReservasService {
     } else {
       const d = s.cliente!;
       const r = await this.db.uno<{ id: number }>(`
-        INSERT INTO clientes (nombres, apellidos, tipo_documento, numero_documento, email, codigo_pais, telefono, residencia, acepta_publicidad)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        INSERT INTO clientes (nombres, apellidos, tipo_documento, numero_documento, email, codigo_pais, telefono, residencia, acepta_publicidad, idioma)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT (tipo_documento, numero_documento) DO UPDATE SET nombres = EXCLUDED.nombres, apellidos = EXCLUDED.apellidos,
           email = EXCLUDED.email, codigo_pais = EXCLUDED.codigo_pais, telefono = EXCLUDED.telefono, residencia = EXCLUDED.residencia,
-          acepta_publicidad = clientes.acepta_publicidad OR EXCLUDED.acepta_publicidad
-        RETURNING id`, [d.nombres, d.apellidos, d.tipoDocumento, d.numeroDocumento, d.email, d.codigoPais, d.telefono, s.residencia, !!s.aceptaPublicidad], c);
+          acepta_publicidad = clientes.acepta_publicidad OR EXCLUDED.acepta_publicidad, idioma = coalesce(EXCLUDED.idioma, clientes.idioma)
+        RETURNING id`, [d.nombres, d.apellidos, d.tipoDocumento, d.numeroDocumento, d.email, d.codigoPais, d.telefono, s.residencia, !!s.aceptaPublicidad, d.idioma ?? null], c);
       clienteId = r!.id;
     }
 
@@ -194,6 +197,8 @@ export class ReservasService {
     const r = await this.db.uno<any>(`
       SELECT r.id, r.codigo, r.estado, r.fecha_entrada, r.fecha_salida, r.noches, r.huespedes, r.subtotal, r.igv, r.total, r.exonerado_igv,
              r.habitacion_id, h.numero AS habitacion, h.tipo_habitacion_id AS tipo_id, t.nombre AS tipo_habitacion,
+             coalesce((SELECT sum(a.total) FROM consumos a WHERE a.reserva_id = r.id AND a.estado = 'Activo'),0) AS consumos_total,
+             coalesce((SELECT sum(a.igv) FROM consumos a WHERE a.reserva_id = r.id AND a.estado = 'Activo'),0) AS consumos_igv,
              EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND ${SQL_VIGENTE}) AS tiene_comprobante
       FROM reservas r JOIN habitaciones h ON h.id = r.habitacion_id JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
       WHERE r.codigo = $1 ${c ? 'FOR UPDATE OF r' : ''}`, [codigo.toUpperCase()], c);
@@ -219,7 +224,7 @@ export class ReservasService {
     return {
       codigo: r.codigo, estado: r.estado, habitacion: r.habitacion, tipoHabitacion: r.tipoHabitacion, desde: r.desde, nochesRestantes: r.nochesRestantes,
       total: r.total, tieneComprobante: r.tieneComprobante,
-      opciones: libres.map(h => ({ ...h, totalRecalculado: recalcularPorCambio(r.total, r.noches, r.nochesRestantes, h.precioNoche, r.exoneradoIgv).total }))
+      opciones: libres.map(h => ({ ...h, totalRecalculado: redondear(recalcularPorCambio(r.total - r.consumosTotal, r.noches, r.nochesRestantes, h.precioNoche, r.exoneradoIgv).total + r.consumosTotal) }))
     };
   }
 
@@ -241,7 +246,8 @@ export class ReservasService {
       let importe = { subtotal: r.subtotal, igv: r.igv, total: r.total };
       if (d.tarifa === 'Recalcular') {
         if (r.tieneComprobante) throw falla(409, 'La reserva ya tiene comprobante electrónico: cambia de habitación manteniendo la tarifa.', 'tarifa');
-        importe = recalcularPorCambio(r.total, r.noches, r.nochesRestantes, nueva.precioNoche, r.exoneradoIgv);
+        const hospedaje = recalcularPorCambio(r.total - r.consumosTotal, r.noches, r.nochesRestantes, nueva.precioNoche, r.exoneradoIgv);
+        importe = { total:redondear(hospedaje.total + r.consumosTotal), igv:redondear(hospedaje.igv + r.consumosIgv), subtotal:redondear(hospedaje.subtotal + r.consumosTotal - r.consumosIgv) };
       }
       await c.query(`UPDATE reservas SET habitacion_id = $2, habitacion_desde = $3, subtotal = $4, igv = $5, total = $6 WHERE id = $1`,
         [r.id, nueva.id, r.desde > r.fechaEntrada ? r.desde : null, importe.subtotal, importe.igv, importe.total]);

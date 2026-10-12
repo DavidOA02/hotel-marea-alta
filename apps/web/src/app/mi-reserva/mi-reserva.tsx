@@ -73,7 +73,7 @@ export function MiReserva() {
       <dl className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {[['Titular', r.titular], ['Habitación N.°', r.habitacion], ['Huéspedes', r.huespedes], ['Llegada', `${fechaLarga(r.fechaEntrada)} · desde 15:00`],
           ['Salida', `${fechaLarga(r.fechaSalida)} · hasta 12:00`], ['Noches', r.noches], ['Valor de venta', soles(r.subtotal)],
-          ['IGV', r.exoneradoIgv ? 'Exonerado' : soles(r.igv)], ['Total', soles(r.total)], ['Pagado', soles(r.pagado)], ['Saldo', soles(r.saldo)]].map(([k, v]) => (
+          ['IGV', r.exoneradoIgv && r.igv <= 0 ? 'Exonerado' : soles(r.igv)], ['Total', soles(r.total)], ['Pagado', soles(r.pagado)], ['Saldo', soles(r.saldo)]].map(([k, v]) => (
           <div key={k}><dt className="text-[0.68rem] font-medium uppercase tracking-[0.2em] text-gold-dark">{k}</dt><dd className="mt-1">{v}</dd></div>))}
       </dl>
       <p className="text-sm text-muted">{r.puedeCancelar ? 'Puedes cancelar sin costo hasta 72 horas antes de tu llegada.' : r.motivoNoCancelable}</p>

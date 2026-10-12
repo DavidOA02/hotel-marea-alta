@@ -11,6 +11,7 @@ import { avisar } from '@/stores/avisos';
 import { BotonP, Estado, Modal } from './base';
 import { AlertaForm, Campo } from './campo';
 import { FormAnularComprobante } from './formularios';
+import { notaDebitoSchema, MOTIVOS_NOTA_DEBITO, type NotaDebitoInput } from '@marea/shared';
 
 export const nombreComprobante = (k: { tipo: string; serie: string; numero: number }) => `${TIPOS_COMPROBANTE[k.tipo]} ${k.serie}-${k.numero}`;
 
@@ -55,7 +56,7 @@ export function FormularioComprobante({ r, abierto, alCerrar, alEmitir }: { r: a
         {estado?.proveedor === null && <p className="rounded-lg bg-warn-bg px-4 py-3 text-sm text-warn">La facturación electrónica no está configurada en la API (FACTURACION y credenciales del OSE).</p>}
         {estado?.proveedor === 'Simulado' && <p className="rounded-lg bg-info-bg px-4 py-3 text-sm text-info">Modo simulado: el comprobante no se envía a SUNAT y no tiene validez tributaria.</p>}
         {exportacion ? (
-          <p className="rounded-lg bg-sand p-4 text-sm"><strong>Factura de exportación de servicios</strong> (hospedaje a extranjero no domiciliado), a nombre de {r.cliente}, {r.documento}. No lleva IGV.</p>
+          <p className="rounded-lg bg-sand p-4 text-sm"><strong>Factura de exportación de servicios</strong> (hospedaje a extranjero no domiciliado), a nombre de {r.cliente}, {r.documento}. El hospedaje no lleva IGV; los consumos adicionales sí.</p>
         ) : <>
           <div className="grid grid-cols-2 rounded-lg bg-sand p-1 text-sm" role="radiogroup" aria-label="Tipo de comprobante">
             {(['Boleta', 'Factura'] as const).map(t => <label key={t} className={`cursor-pointer rounded-md py-2 text-center ${tipo === t ? 'bg-white font-medium shadow-sm' : ''}`}>
@@ -69,7 +70,8 @@ export function FormularioComprobante({ r, abierto, alCerrar, alEmitir }: { r: a
             </div>)}
         </>}
         <div className="rounded-xl border border-line bg-[#FAF8F4] p-4 text-sm">
-          {exportacion ? <div className="flex justify-between"><span>Exportación de servicios</span><span className="tabular-nums">{soles(r.total)}</span></div> : <>
+          {exportacion ? <><div className="flex justify-between"><span>Exportación de servicios</span><span className="tabular-nums">{soles(r.total - (r.consumosTotal ?? 0))}</span></div>
+            {r.igv > 0 && <><div className="flex justify-between"><span>Consumos gravados</span><span>{soles((r.consumosTotal ?? 0) - r.igv)}</span></div><div className="flex justify-between"><span>IGV 18 %</span><span>{soles(r.igv)}</span></div></>}</> : <>
             <div className="flex justify-between"><span>Op. gravada</span><span className="tabular-nums">{soles(r.subtotal)}</span></div>
             <div className="flex justify-between"><span>IGV 18 %</span><span className="tabular-nums">{soles(r.igv)}</span></div></>}
           <div className="mt-1 flex justify-between border-t border-line pt-2 font-semibold"><span>Importe total</span><span className="tabular-nums">{soles(r.total)}</span></div>
@@ -81,11 +83,25 @@ export function FormularioComprobante({ r, abierto, alCerrar, alEmitir }: { r: a
 }
 
 /** Boleta o factura vigente: no es nota de crédito, ni rechazada, dada de baja o neutralizada por una nota total. */
-export const esVigente = (k: any) => k.tipo !== '07' && !['Rechazado', 'Anulado'].includes(k.estado) && !k.anuladoConNota;
+export const esVigente = (k: any) => ['01','03'].includes(k.tipo) && !['Rechazado', 'Anulado'].includes(k.estado) && !k.anuladoConNota;
+export const admiteDebito = (k: any) => esVigente(k) && ['Aceptado','Observado'].includes(k.estado);
 /** Se puede emitir nota de crédito: comprobante vigente aceptado con importe por rebajar. */
 export const admiteNota = (k: any) => esVigente(k) && ['Aceptado', 'Observado'].includes(k.estado) && k.disponibleNota > 0.009;
 /** Baja: hasta 7 días y sin notas de crédito previas; si no, corresponde una nota de crédito. */
-export const admiteBaja = (k: any) => admiteNota(k) && Math.abs(k.disponibleNota - k.total) < 0.005 && diasEntre(String(k.fechaEmision).slice(0, 10), hoyLima()) <= 7;
+export const admiteBaja = (k: any) => admiteNota(k) && !k.tieneDebito && Math.abs(k.disponibleNota - k.total) < 0.005 && diasEntre(String(k.fechaEmision).slice(0, 10), hoyLima()) <= 7;
+
+export function FormularioNotaDebito({ k, alCerrar, alEmitir }: { k:any; alCerrar:()=>void; alEmitir?:()=>void }) {
+  const [general,setGeneral] = useState<string|null>(null);
+  const {register,handleSubmit,reset,setError,formState:{errors,isSubmitting}} = useForm<NotaDebitoInput,unknown,any>({resolver:zodResolver(notaDebitoSchema)});
+  useEffect(()=>{if(k){reset({motivo:'02',monto:undefined,sustento:''});setGeneral(null);}},[k,reset]);
+  const enviar=handleSubmit(async d=>{try {const x=await apiPanel(`/gestion/comprobantes/${k.id}/nota-debito`,{method:'POST',body:d});avisar(x.mensaje,x.estado==='Rechazado'?'warn':'ok');if(x.advertencia)avisar(x.advertencia,'warn');alCerrar();alEmitir?.();refrescar();}catch(e){const er=e as ApiError;if(er.campo)setError(er.campo as any,{message:er.message});else setGeneral(er.message);}});
+  return <Modal abierto={!!k} alCerrar={alCerrar} titulo={`Nota de débito · ${k ? nombreComprobante(k) : ''}`} pie={<><BotonP variante="claro" onClick={alCerrar}>Cancelar</BotonP><BotonP disabled={isSubmitting} onClick={enviar}>{isSubmitting?'Enviando…':'Emitir nota de débito'}</BotonP></>}>
+    <form onSubmit={enviar} className="grid gap-4"><AlertaForm texto={general}/><p className="text-sm text-muted">Aumenta el total y el saldo de la reserva. Si SUNAT rechaza la nota, el cargo se revierte. El monto incluye IGV.</p>
+      <Campo etiqueta="Motivo" error={errors.motivo?.message as string}><select {...register('motivo')}>{Object.entries(MOTIVOS_NOTA_DEBITO).map(([v,t])=><option key={v} value={v}>{v} · {t}</option>)}</select></Campo>
+      <Campo etiqueta="Monto (S/)" error={errors.monto?.message as string}><input type="number" min="0.01" step="0.01" {...register('monto')}/></Campo>
+      <Campo etiqueta="Sustento" error={errors.sustento?.message as string}><input maxLength={250} {...register('sustento')}/></Campo>
+    </form></Modal>;
+}
 
 /** Nota de crédito (administrador): anulación total, error en el RUC o disminución parcial del valor. */
 export function FormularioNotaCredito({ k, abierto, alCerrar, alEmitir }: { k: any; abierto: boolean; alCerrar: () => void; alEmitir?: () => void }) {
@@ -131,6 +147,7 @@ export function SeccionComprobantes({ r, comprobantes, alCambiar }: { r: any; co
   const [emitir, setEmitir] = useState(false);
   const [anular, setAnular] = useState<any>(null);
   const [nota, setNota] = useState<any>(null);
+  const [debito, setDebito] = useState<any>(null);
   const vigente = comprobantes.find(esVigente);
   const pagada = r.pagado > 0.009 && r.saldo <= 0.009;
   const puede = !vigente && !['Cancelada', 'NoShow'].includes(r.estado);
@@ -145,7 +162,7 @@ export function SeccionComprobantes({ r, comprobantes, alCambiar }: { r: any; co
           <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 font-medium">
             {k.tipo === '07' ? <FileMinus className="size-4 text-bad" aria-hidden /> : <FileText className="size-4 text-muted" aria-hidden />}{nombreComprobante(k)}</span><Estado valor={k.estado} /></div>
           <span className="text-xs text-muted">{fechaMedia(k.fechaEmision)} · {k.clienteNombre} ({k.clienteNumDoc}) · {k.tipo === '07' ? '−' : ''}{soles(k.total)}{k.proveedor === 'Simulado' ? ' · simulado' : ''}</span>
-          {k.tipo === '07' && <span className="text-xs text-muted">Modifica {TIPOS_COMPROBANTE[k.refTipo]} {k.refSerie}-{k.refNumero} · {MOTIVOS_NOTA_CREDITO[k.motivoNota]}: {k.sustento}</span>}
+          {['07','08'].includes(k.tipo) && <span className="text-xs text-muted">Modifica {TIPOS_COMPROBANTE[k.refTipo]} {k.refSerie}-{k.refNumero} · {(k.tipo === '08' ? MOTIVOS_NOTA_DEBITO : MOTIVOS_NOTA_CREDITO)[k.motivoNota]}: {k.sustento}</span>}
           {k.anuladoConNota && <span className="text-xs text-bad">Neutralizado con la nota de crédito {k.anuladoConNota}</span>}
           {k.tipo !== '07' && !k.anuladoConNota && k.disponibleNota < k.total - 0.005 && <span className="text-xs text-muted">Rebajado con notas de crédito: quedan {soles(k.disponibleNota)}</span>}
           {k.mensaje && k.estado !== 'Aceptado' && <span className="text-xs text-muted">{k.mensaje}</span>}
@@ -161,6 +178,8 @@ export function SeccionComprobantes({ r, comprobantes, alCambiar }: { r: any; co
       <FormularioComprobante r={r} abierto={emitir} alCerrar={() => setEmitir(false)} alEmitir={alCambiar} />
       <FormAnularComprobante k={anular} abierto={!!anular} alCerrar={() => { setAnular(null); alCambiar(); }} />
       <FormularioNotaCredito k={nota} abierto={!!nota} alCerrar={() => setNota(null)} alEmitir={alCambiar} />
+      {admin && vigente && admiteDebito(vigente) && <BotonP variante="claro" onClick={()=>setDebito(vigente)}>Nota de débito</BotonP>}
+      <FormularioNotaDebito k={debito} alCerrar={()=>setDebito(null)} alEmitir={alCambiar}/>
     </section>
   );
 }

@@ -143,7 +143,7 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - **Al reservar** (web o panel): la confirmación.
   - **Al cancelar**: el aviso de cancelación.
   - **Con un pago en línea o una devolución**: el recibo.
-  - **Al aceptarse un comprobante o una nota de crédito**: el documento electrónico.
+  - **Al aceptarse un comprobante o una nota de crédito o débito**: el documento electrónico.
   - **Dos días antes de la llegada**: un recordatorio con la hora de check-in, cómo llegar, el saldo pendiente y los documentos que debe traer. No se envía si la reserva se hizo el día anterior.
   - **Entre 2 horas y 3 días después del check-out**: la encuesta de satisfacción.
   - **Por el Libro de Reclamaciones**: la constancia de la hoja y la **respuesta** que registra el administrador.
@@ -155,6 +155,7 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - La **campana** del panel avisa cuando hay correos fallidos o con más de 30 minutos en cola.
 - En la ficha de la reserva y en la hoja de reclamación se ve si cada correo se envió; desde la ficha se puede reenviar la confirmación.
 - Las plantillas escapan todo dato que escribe el usuario (evita inyección de HTML).
+- **Idioma**: confirmación, cancelación, pago, devolución, recordatorio, encuesta y comprobantes disponibles en español e inglés. En la reserva web, el alta del panel y la ficha del cliente se elige el idioma; «Automático» usa inglés para residencia extranjera y español para Perú. La residencia y la exoneración siguen siendo datos separados de la preferencia de idioma. El Libro de Reclamaciones tiene su propio selector para la constancia y la respuesta; el texto escrito por el administrador se conserva.
 
 ### Pagos en línea (`apps/api/src/pagos-en-linea`)
 - **Flujo**: «Mi reserva» o la confirmación de la reserva → **Pagar en línea** → página `/pago`.
@@ -174,8 +175,9 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
 ### Devoluciones (`apps/api/src/pagos/devoluciones.service.ts`)
 - **Dónde**: ficha de la reserva → pago → **Devolver** (solo administrador).
 - **Cómo se devuelve**:
-  - **Culqi y Mercado Pago**: la devolución se pide por API, total o parcial. Mercado Pago usa una clave de idempotencia, así que reintentar no devuelve dos veces.
-  - **Niubiz, efectivo, transferencia, Yape…**: el hotel devuelve el dinero (Niubiz desde su portal) y lo registra en el sistema.
+  - **Culqi, Mercado Pago y Niubiz**: la devolución se pide por API, total o parcial. Mercado Pago usa una clave de idempotencia, así que reintentar no devuelve dos veces.
+  - **Niubiz**: el registro genera una solicitud pendiente; la API consulta su código cada 5 minutos (también desde la ficha). Solo el estado exitoso `S` descuenta lo pagado y envía el correo. Si falla la autenticación antes del registro, se puede reintentar. Si se pierde la respuesta del registro, nunca se repite el POST: «Conciliar» permite ingresar el código confirmado en Niubiz y verificar que coincidan la transacción y el monto. Usa el RUC del emisor (`HOTEL_RUC`) y requiere una venta liquidada y acceso a las API de devoluciones.
+  - **Efectivo, transferencia, Yape…**: el hotel devuelve el dinero y lo registra en el sistema.
 - **Lo pagado** de una reserva es pagos aprobados menos devoluciones completadas, calculado en un solo lugar: la función SQL `pagado_neto`. La usan la ficha, la caja, el dashboard, los reportes y Power BI.
 - **Descuento o noches no usadas** («bajar el total de la reserva»):
   - Rebaja el total de la reserva.
@@ -204,6 +206,15 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - **Nota parcial (09)**: baja el total de la reserva. Si SUNAT la rechaza, la rebaja se revierte.
   - No mueven dinero: si hay que devolver, se hace desde el pago.
 - **Pantalla** «Comprobantes»: registro de ventas por fechas, donde las notas de crédito restan. Muestra totales (gravada, exportación, IGV) y exporta a CSV. Para Power BI está la vista `vw_comprobantes_powerbi` (columna `total_neto`).
+
+### Consumos adicionales y notas de débito
+- **Dónde**: ficha de la reserva → **Consumos adicionales** → **Agregar consumo**. Categorías: restaurante, bar, tour, minibar, late check-out y otros; descripción, cantidad y precio unitario en soles con IGV incluido.
+- El consumo aumenta el total y el saldo; los cobros, la caja y los reportes usan ese total. Los consumos llevan IGV incluso si el hospedaje es exportación: el comprobante conserva ambas bases y muestra cada consumo como línea separada.
+- Antes de emitir, recepción puede agregar consumos y el administrador puede anularlos con motivo. Los consumos documentados se conservan. Al cambiar de habitación con recálculo, solo se recalcula el hospedaje, manteniendo los consumos.
+- Si ya hay boleta o factura aceptada, agregar un consumo requiere administrador y crea una **nota de débito** por aumento de valor. Si el comprobante está pendiente, hay que esperar su respuesta.
+- Desde la ficha o «Comprobantes», el administrador también puede emitir una nota de débito directamente: **01 intereses por mora, 02 aumento de valor, 03 penalidades**. Cada nota referencia una boleta o factura aceptada y vigente; no puede modificar otra nota.
+- Series propias `BD01` / `FD01`, configurables con `SERIE_ND_BOLETA` y `SERIE_ND_FACTURA`. La nota sube el saldo, suma en el registro de ventas, CSV y Power BI y se envía por correo al aceptarse. Si el OSE la rechaza, se revierte el cargo y se anula el consumo asociado.
+- Un comprobante con notas de débito vigentes no se da de baja ni se neutraliza mediante una nota de crédito total desde este flujo. Las notas de crédito parciales siguen disponibles sobre el importe original.
 
 ### Cambio de habitación de una reserva en curso
 - **Dónde**: ficha de la reserva (confirmada o con el huésped en el hotel) → **Cambiar habitación**.
@@ -241,11 +252,12 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
 Las integraciones reales se escribieron según la documentación oficial y sus contratos están probados con `fetch` simulado. **Aún no se han probado contra los servicios reales**: valídalas con las cuentas de prueba (sandbox) de cada proveedor.
 - **Niubiz**:
   - Los campos antifraude `MDD` los define Niubiz para cada comercio; ajústalos en `pasarelas.ts`.
-  - Las devoluciones se hacen en su portal y se registran en el sistema.
+  - Habilita las API de devoluciones y prueba registros, consultas y conciliaciones con ventas liquidadas. El proveedor documenta hosts distintos en sandbox para registro y consulta; se pueden configurar con `NIUBIZ_DEVOLUCIONES_URL` y `NIUBIZ_CONSULTA_DEVOLUCIONES_URL`.
 - **Culqi**: prueba el 3-D Secure con las tarjetas de prueba que lo exigen. La documentación de Culqi se contradice sobre el código HTTP (200 o 201) del cargo que pide 3DS, así que la API decide por el cuerpo de la respuesta (`object: "charge"` o `action_code: "REVIEW"`).
 - **Nubefact**:
   - Revisa con la cuenta DEMO los códigos de la exportación (`sunat_transaction`, `tipo_de_igv`, `total_inafecta`) y de las notas de crédito (`tipo_de_comprobante: 3`, `documento_que_se_modifica_*`, `tipo_de_nota_de_credito`, sustento en `observaciones`), todos en `proveedores.ts`.
   - Registra en Nubefact las series de notas de crédito (`SERIE_NC_BOLETA`, `SERIE_NC_FACTURA`).
+  - Registra también las series de débito (`SERIE_ND_BOLETA`, `SERIE_ND_FACTURA`) y valida las notas (`tipo_de_comprobante: 4`, `tipo_de_nota_de_debito`) y las cuentas con líneas gravadas y exportadas.
   - Confirma con tu contador el tratamiento tributario del hospedaje a no domiciliados.
 - **Mercado Pago**: necesita `API_URL_PUBLICA` con HTTPS accesible desde Internet para los webhooks.
 - **Correos programados**: con datos de demostración (`npm run db:demo`) y SMTP configurado, se enviarían recordatorios y encuestas a correos ficticios. Usa `CORREOS_PROGRAMADOS=false` en ese caso.
@@ -298,8 +310,7 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
 - **Base de datos**: cualquier PostgreSQL 14+ con permiso para `CREATE EXTENSION btree_gist`.
 - **Usuarios**: cambia las contraseñas iniciales.
 
-## Mejoras posibles
-- Notas de débito (penalidades y cargos adicionales, como el minibar o el late check-out).
-- Devoluciones por API de Niubiz (hoy se hacen en su portal y se registran en el sistema).
-- Consumos adicionales en la cuenta del huésped (restaurante, bar, tours) incluidos en el comprobante.
-- Correos en inglés para los huéspedes extranjeros.
+## Referencias de las integraciones
+- [Niubiz: registro individual de devoluciones](https://desarrolladores.niubiz.com.pe/docs/api-de-registro-individual-copy).
+- [Niubiz: consulta del estado de devolución](https://desarrolladores.niubiz.com.pe/docs/api-de-consulta-devolución-copy).
+- [Nubefact: documentación oficial y manual JSON para facturas, boletas y notas](https://www.nubefact.com/integracion).

@@ -49,6 +49,7 @@ export function FormularioReclamo() {
         <Campo k="domicilio" t="Domicilio" full autoComplete="street-address" />
         <Campo k="telefono" t="Teléfono" tipo="tel" autoComplete="tel" />
         <Campo k="email" t="Correo electrónico" tipo="email" autoComplete="email" />
+        <div><label className="campo-label" htmlFor="r-idioma">Idioma de correos / Email language</label><select id="r-idioma" className="campo" {...register('idioma')}><option value="es">Español</option><option value="en">English</option></select></div>
         <label className="flex items-center gap-3 sm:col-span-2"><input type="checkbox" className="size-5 accent-ocean" {...register('esMenor')} /> Soy menor de edad</label>
         {esMenor && <Campo k="apoderado" t="Nombre del padre, madre o apoderado" full />}
       </fieldset>

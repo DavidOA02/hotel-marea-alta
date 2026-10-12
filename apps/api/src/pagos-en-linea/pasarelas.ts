@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import { NombrePasarela, urlApi, urlWeb } from '../config/env';
+import { HOTEL } from '../config/hotel';
 
 /* ==========================================================
    Pasarelas de pago. Cada una traduce entre nuestra «orden» y la API del proveedor:
@@ -16,6 +17,8 @@ export type MetodoPago = 'Tarjeta' | 'Yape' | 'Transferencia';
 export interface Resultado { aprobado: boolean; referencia: string | null; metodo: MetodoPago; mensaje: string; respuesta: Record<string, unknown> }
 
 export class ErrorPasarela extends Error {}
+/** Falló la preparación: todavía no se llamó al endpoint que devuelve dinero. */
+export class ErrorDevolucionNoEnviada extends ErrorPasarela {}
 const TIEMPO_MS = 20_000;
 
 async function llamar(url: string, init: { method?: string; headers?: Record<string, string>; json?: unknown } = {}): Promise<{ status: number; ok: boolean; cuerpo: any }> {
@@ -183,6 +186,38 @@ export const Niubiz = {
     if (!r.ok || !r.cuerpo?.sessionKey) throw new ErrorPasarela(`Niubiz no creó la sesión (${r.status}): ${r.cuerpo?.errorMessage ?? ''}`);
     return { sessionKey: r.cuerpo.sessionKey, comercio, numeroPedido: String(o.numero), monto: o.monto.toFixed(2), script: niubizScript(),
       accion: `${urlApi()}/pagos-en-linea/${o.id}/niubiz`, retorno: enlaceRetorno(o) };
+  },
+  async devolver(transaccion: string, monto: number, referencia: string, motivo: string): Promise<ResultadoDevolucion> {
+    if (!transaccion) throw new ErrorDevolucionNoEnviada('El pago no tiene ID de transacción Niubiz.');
+    let token: string;
+    try { token = await niubizToken(); }
+    catch (e: any) { throw new ErrorDevolucionNoEnviada(e?.message ?? String(e)); }
+    const base = process.env.NIUBIZ_DEVOLUCIONES_URL || (process.env.NIUBIZ_PRODUCCION === 'true' ? 'https://apiprod.vnforapps.com' : 'https://apisandbox.vnforappstest.com');
+    const r = await llamar(`${base}/api.refund/v1/refund/${encodeURIComponent(process.env.NIUBIZ_COMERCIO!)}/${encodeURIComponent(transaccion)}`, {
+      method:'POST', headers:{ Authorization:token }, json:{ ruc:HOTEL.ruc, comment:motivo.slice(0,100), externalReferenceId:referencia, amount:monto }
+    });
+    const d = r.cuerpo?.data;
+    if (r.status >= 500 || r.status === 401 || r.status === 403 || !d) throw new ErrorPasarela(`Niubiz respondió ${r.status} al solicitar la devolución.`);
+    if (r.ok && String(d.CODERROR) === '100' && d.CODIGODEVOLUCION?.trim())
+      return { estado:'Pendiente', referencia:d.CODIGODEVOLUCION.trim(), mensaje:d.DSCERROR || 'Solicitud registrada; pendiente del banco.', respuesta:{ codigo:d.CODERROR, devolucion:d.CODIGODEVOLUCION } };
+    if (String(d.CODERROR) !== '110') throw new ErrorPasarela('Niubiz no confirmó el registro de la devolución.');
+    return { estado:'Fallida', referencia:null, mensaje:d.DSCERROR || r.cuerpo.errorMessage || 'Solicitud rechazada.', respuesta:{ codigo:d.CODERROR } };
+  },
+  async consultarDevolucion(codigo: string): Promise<ResultadoDevolucion> {
+    const token = await niubizToken();
+    const base = process.env.NIUBIZ_CONSULTA_DEVOLUCIONES_URL || (process.env.NIUBIZ_PRODUCCION === 'true' ? 'https://apiprod.vnforapps.com' : 'https://apitestenv.vnforapps.com');
+    const r = await llamar(`${base}/api.refund/v1/queryRefund/${encodeURIComponent(process.env.NIUBIZ_COMERCIO!)}`, {
+      method:'POST', headers:{ Authorization:token }, json:{ tipoBusqueda:'01', codigoBusqueda:codigo }
+    });
+    const d = r.cuerpo?.data;
+    if (!r.ok || String(d?.CODERROR) !== '100') throw new ErrorPasarela('Niubiz no confirmó la consulta de la devolución.');
+    let lista = d.DEVOLUCIONES;
+    if (typeof lista === 'string') { try { lista = JSON.parse(lista); } catch { throw new ErrorPasarela('Respuesta de devolución Niubiz inválida.'); } }
+    const dev = Array.isArray(lista) ? lista.find(x => String(x.CODIGODEVOLUCION) === codigo) : null;
+    if (!dev) throw new ErrorPasarela('Niubiz no devolvió el código solicitado.');
+    const estado = dev.ESTADO === 'S' ? 'Completada' : ['T','X','F','V'].includes(dev.ESTADO) ? 'Fallida' : 'Pendiente';
+    return { estado, referencia:codigo, mensaje:dev.DESCRIPCIONESTADO || `Estado Niubiz: ${dev.ESTADO}`, respuesta:{ codigo, estado:dev.ESTADO,
+      transaccion:dev.IDTRANSACCION, monto:Number(dev.IMPORTEDEVUELTO) } };
   },
   /** Autoriza la transacción con el transactionToken que Niubiz envía al formulario «action». */
   async autorizar(o: Orden, transactionToken: string): Promise<Resultado> {

@@ -17,7 +17,8 @@ export const TIPOS_DOCUMENTO = ['DNI', 'CE', 'PAS'] as const;
 export const TARIFAS_CAMBIO = ['Mantener', 'Recalcular'] as const;
 export const ESTADOS_COMPROBANTE = ['Pendiente', 'Aceptado', 'Observado', 'Rechazado', 'Anulado'] as const;
 /** Catálogo 01 de SUNAT. */
-export const TIPOS_COMPROBANTE: Record<string, string> = { '01': 'Factura', '03': 'Boleta', '07': 'Nota de crédito' };
+export const TIPOS_COMPROBANTE: Record<string, string> = { '01': 'Factura', '03': 'Boleta', '07': 'Nota de crédito', '08': 'Nota de débito' };
+export const MOTIVOS_NOTA_DEBITO: Record<string, string> = { '01': 'Intereses por mora', '02': 'Aumento de valor', '03': 'Penalidades' };
 /** Catálogo 09 de SUNAT (motivos de nota de crédito que usa el hotel). */
 export const MOTIVOS_NOTA_CREDITO: Record<string, string> = {
   '01': 'Anulación de la operación', '02': 'Anulación por error en el RUC', '06': 'Devolución total', '09': 'Disminución en el valor'

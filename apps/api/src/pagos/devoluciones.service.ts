@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { redondear } from '@marea/shared';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
@@ -7,12 +7,12 @@ import { Bitacora } from '../auditoria/bitacora.service';
 import { Correos } from '../correo/correos.service';
 import { devolucionRealizada, soles } from '../correo/plantillas';
 import { Facturacion } from '../facturacion/facturacion.service';
-import { Culqi, ErrorPasarela, MercadoPago, ResultadoDevolucion, Simulada } from '../pagos-en-linea/pasarelas';
+import { Culqi, ErrorDevolucionNoEnviada, ErrorPasarela, MercadoPago, Niubiz, ResultadoDevolucion, Simulada } from '../pagos-en-linea/pasarelas';
 import { SQL_RESERVA } from '../reservas/reservas.service';
 import { PagosService } from './pagos.service';
 
-/** Pasarelas que devuelven por API; con las demás (Niubiz, efectivo, transferencia…) el hotel devuelve y lo registra aquí. */
-const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Simulada'];
+/** Pasarelas que devuelven por API; con efectivo o transferencia el hotel devuelve y lo registra aquí. */
+const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Niubiz', 'Simulada'];
 
 /**
  * Devoluciones de dinero. Cuentan contra lo pagado de la reserva (pagado_neto) cuando están «Completada».
@@ -20,10 +20,37 @@ const AUTOMATICAS = ['Culqi', 'MercadoPago', 'Simulada'];
  * la rebaja se documenta con una nota de crédito en la misma transacción.
  */
 @Injectable()
-export class Devoluciones {
+export class Devoluciones implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Devoluciones');
+  private reloj?: NodeJS.Timeout;
+  private enCurso: Promise<void> | null = null;
+  private cerrado = false;
+  private cursorPendientes = 0;
   constructor(private readonly db: Db, private readonly pagos: PagosService, private readonly facturacion: Facturacion,
               private readonly bitacora: Bitacora, private readonly correos: Correos) {}
+
+  onModuleInit() {
+    if (process.env.PROCESOS_EN_SEGUNDO_PLANO !== 'false') {
+      this.reloj = setInterval(() => this.consultarPendientes(), 5 * 60_000); this.reloj.unref();
+    }
+  }
+  async onModuleDestroy() { this.cerrado = true; clearInterval(this.reloj); await this.enCurso?.catch(() => undefined); }
+  private consultarPendientes() {
+    if (this.cerrado || this.enCurso) return;
+    this.enCurso = (async () => {
+      const sql = `SELECT id FROM devoluciones WHERE estado = 'Pendiente' AND pasarela = 'Niubiz' AND medio = 'Pasarela' AND referencia_externa IS NOT NULL AND id > $1 ORDER BY id LIMIT 50`;
+      let lista = await this.db.query<{id:number}>(sql, [this.cursorPendientes]);
+      if (!lista.length && this.cursorPendientes) {
+        this.cursorPendientes = 0;
+        lista = await this.db.query<{id:number}>(sql, [this.cursorPendientes]);
+      }
+      for (const d of lista) {
+        if (this.cerrado) break;
+        this.cursorPendientes = d.id;
+        await this.ejecutar(d.id);
+      }
+    })().catch(e=>this.log.error(e.message)).finally(()=>{this.enCurso=null;});
+  }
 
   async devolver(pagoId: number, d: { monto: number; motivo: string; reducirTotal: boolean }, registradoPor: string) {
     const monto = redondear(d.monto);
@@ -53,7 +80,7 @@ export class Devoluciones {
       const dev = (await this.db.uno<any>(`INSERT INTO devoluciones (pago_id, reserva_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha_resultado)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
         [p.id, p.reservaId, monto, d.motivo, d.reducirTotal, automatica ? 'Pasarela' : 'Manual', p.pasarela, automatica ? 'Pendiente' : 'Completada',
-          p.pasarela === 'Niubiz' ? 'Hecha desde el portal de Niubiz y registrada en el sistema.' : null, registradoPor, automatica ? null : new Date()], c))!;
+          null, registradoPor, automatica ? null : new Date()], c))!;
       const origen = p.pasarela ? `en línea, ${p.pasarela}` : p.metodo;
       await this.bitacora.registrar({ accion: 'pago.devolver', entidad: 'reserva', entidadId: p.codigo,
         descripcion: `Devolución de ${soles(monto)} del pago de ${soles(p.montoSoles)} (${origen}) ${automatica ? `solicitada a ${p.pasarela}` : 'registrada'}${d.reducirTotal ? ' como descuento sobre el total' : ''}. Motivo: ${d.motivo}`.slice(0, 500),
@@ -66,8 +93,7 @@ export class Devoluciones {
     const notaFinal = nota ? await this.facturacion.enviarNota(nota.id) : null;
     const final = (await this.ver(dev.id))!;
     const textos: Record<string, string> = { Completada: 'completada', Pendiente: 'en proceso', Fallida: 'rechazada por la pasarela' };
-    const avisos = [final.estado !== 'Completada' ? final.mensaje : null, notaFinal ? `${notaFinal.mensaje}${notaFinal.advertencia ? ' ' + notaFinal.advertencia : ''}` : null,
-      pago.pasarela === 'Niubiz' ? 'Niubiz no devuelve por API: haz la devolución en su portal si aún no la hiciste.' : null].filter(Boolean);
+    const avisos = [final.estado !== 'Completada' ? final.mensaje : null, notaFinal ? `${notaFinal.mensaje}${notaFinal.advertencia ? ' ' + notaFinal.advertencia : ''}` : null].filter(Boolean);
     return { ...final, notaCredito: notaFinal, mensaje: `Devolución de ${soles(monto)} ${final.medio === 'Manual' ? 'registrada' : textos[final.estado]}.`,
       advertencia: avisos.length ? avisos.join(' ') : null };
   }
@@ -78,17 +104,39 @@ export class Devoluciones {
     if (!d || d.estado !== 'Pendiente' || d.medio !== 'Pasarela') return;
     let r: ResultadoDevolucion;
     try {
-      r = d.pasarela === 'Culqi' ? await Culqi.devolver(d.referencia, d.monto)
+      if (d.pasarela === 'Niubiz') {
+        if (d.referenciaExterna) {
+          r = await Niubiz.consultarDevolucion(d.referenciaExterna);
+          if (String(r.respuesta.transaccion) !== d.referencia || Math.abs(Number(r.respuesta.monto) - d.monto) > 0.001 || !Number.isFinite(r.respuesta.monto))
+            throw new ErrorPasarela('La consulta Niubiz no coincide con la transacción y el monto de la devolución.');
+        }
+        else {
+          // externalReferenceId identifica la solicitud, pero Niubiz no documenta idempotencia.
+          // La marca se confirma ANTES del HTTP. Una respuesta perdida nunca provoca otro POST.
+          const envio = await this.db.uno(`UPDATE devoluciones SET solicitud_enviada = true WHERE id = $1 AND solicitud_enviada = false AND estado = 'Pendiente' RETURNING id`, [id]);
+          if (!envio) {
+            await this.db.query(`UPDATE devoluciones SET mensaje = 'Solicitud ya enviada sin código confirmado. Verifica con Niubiz antes de registrar otra devolución.' WHERE id = $1 AND estado = 'Pendiente' AND referencia_externa IS NULL`, [id]);
+            return;
+          }
+          r = await Niubiz.devolver(d.referencia, d.monto, `MA-DEV-${d.id}`, d.motivo);
+        }
+      } else r = d.pasarela === 'Culqi' ? await Culqi.devolver(d.referencia, d.monto)
         : d.pasarela === 'MercadoPago' ? await MercadoPago.devolver(d.referencia, d.monto, `marea-devolucion-${d.id}`)
         : await Simulada.devolver(d.id);
     } catch (e: any) {
       const m = e instanceof ErrorPasarela ? e.message : String(e?.message ?? e);
       this.log.error(`Devolución ${id}: ${m}`);
+      if (d.pasarela === 'Niubiz' && e instanceof ErrorDevolucionNoEnviada) {
+        // Solo se libera cuando sabemos que el POST de devolución nunca empezó.
+        await this.db.query(`UPDATE devoluciones SET solicitud_enviada = false, mensaje = $2
+          WHERE id = $1 AND estado = 'Pendiente' AND referencia_externa IS NULL`, [id, `Solicitud no enviada (${m}). Corrige la configuración o reintenta.`.slice(0,300)]);
+        return;
+      }
       await this.db.query(`UPDATE devoluciones SET mensaje = $2 WHERE id = $1 AND estado = 'Pendiente'`, [id, `Sin respuesta de la pasarela (${m}). Verifica en su panel antes de reintentar.`.slice(0, 300)]);
       return;
     }
     await this.db.transaccion(async c => {
-      const x = await this.db.uno<any>(`UPDATE devoluciones SET estado = $2, referencia_externa = $3, respuesta = $4, mensaje = $5,
+      const x = await this.db.uno<any>(`UPDATE devoluciones SET estado = $2, referencia_externa = coalesce($3, referencia_externa), respuesta = $4, mensaje = $5,
         fecha_resultado = CASE WHEN $6 THEN now() END WHERE id = $1 AND estado = 'Pendiente' RETURNING *`,
         [id, r.estado, r.referencia, JSON.stringify(r.respuesta), r.mensaje.slice(0, 300), r.estado !== 'Pendiente'], c);
       if (!x || r.estado === 'Pendiente') return;
@@ -113,6 +161,23 @@ export class Devoluciones {
     const act = (await this.ver(id))!;
     return { ...act, mensaje: act.estado === 'Completada' ? 'Devolución completada.' : act.estado === 'Fallida' ? 'La pasarela rechazó la devolución.' : 'La pasarela aún no confirma la devolución.',
       advertencia: act.estado !== 'Completada' ? act.mensaje : null };
+  }
+
+  /** Recupera el código confirmado en Niubiz cuando se perdió la respuesta del registro. */
+  async conciliarNiubiz(id: number, codigo: string) {
+    const d = await this.db.uno<any>(`SELECT d.*, p.referencia FROM devoluciones d JOIN pagos p ON p.id = d.pago_id WHERE d.id = $1`, [id]);
+    if (!d || d.pasarela !== 'Niubiz' || d.medio !== 'Pasarela' || d.estado !== 'Pendiente' || !d.solicitudEnviada || d.referenciaExterna)
+      throw falla(409, 'Solo se concilian solicitudes Niubiz pendientes sin código confirmado.');
+    const r = await Niubiz.consultarDevolucion(codigo);
+    if (String(r.respuesta.transaccion) !== d.referencia || Number(r.respuesta.monto) !== d.monto)
+      throw falla(409, 'El código no corresponde a la transacción y al monto de esta devolución.');
+    await this.db.transaccion(async c => {
+      const act = await c.query(`UPDATE devoluciones SET referencia_externa = $2 WHERE id = $1 AND estado = 'Pendiente' AND referencia_externa IS NULL RETURNING reserva_id`, [id,codigo]);
+      if (!act.rowCount) throw falla(409, 'La devolución cambió mientras se consultaba.');
+      const { codigo:reserva } = (await this.db.uno<any>('SELECT codigo FROM reservas WHERE id = $1', [d.reservaId], c))!;
+      await this.bitacora.registrar({ accion:'pago.conciliar_niubiz', entidad:'reserva', entidadId:reserva, descripcion:`Código Niubiz ${codigo} asociado a la devolución ${id}.`, datos:{ devolucionId:id, codigo } }, c);
+    });
+    return this.reintentar(id);
   }
 
   ver(id: number) {

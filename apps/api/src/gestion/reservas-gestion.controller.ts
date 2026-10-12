@@ -41,20 +41,21 @@ export class ReservasGestionController {
   async detalle(@Param('codigo') codigo: string) {
     const reserva = await this.db.uno<any>(SQL_RESERVA + ' WHERE r.codigo = $1', [codigo.toUpperCase()]);
     if (!reserva) throw falla(404, 'Reserva no encontrada.');
-    const [pagos, devoluciones, cambios, comprobantes, correos, historial] = await Promise.all([
+    const [pagos, devoluciones, cambios, comprobantes, correos, historial, consumos] = await Promise.all([
       this.db.query(`SELECT p.id, p.monto, p.moneda, p.tipo_cambio, p.monto_soles, p.metodo, p.referencia, p.estado, p.fecha_pago, p.registrado_por, p.motivo_anulacion, p.pasarela,
           p.monto_soles - coalesce((SELECT sum(dv.monto) FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida'), 0) AS disponible_devolucion
         FROM pagos p WHERE p.reserva_id = $1 ORDER BY p.fecha_pago`, [reserva.id]),
-      this.db.query(`SELECT id, pago_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha, fecha_resultado
+      this.db.query(`SELECT id, pago_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha, fecha_resultado, solicitud_enviada, referencia_externa
         FROM devoluciones WHERE reserva_id = $1 ORDER BY id`, [reserva.id]),
       this.db.query(`SELECT ch.fecha, ch.desde, ha.numero AS habitacion_anterior, hn.numero AS habitacion_nueva, ch.tarifa, ch.total_anterior, ch.total_nuevo, ch.motivo, ch.registrado_por
         FROM cambios_habitacion ch JOIN habitaciones ha ON ha.id = ch.habitacion_anterior_id JOIN habitaciones hn ON hn.id = ch.habitacion_nueva_id
         WHERE ch.reserva_id = $1 ORDER BY ch.fecha`, [reserva.id]),
       this.db.query(`${SQL_COMPROBANTE} WHERE k.reserva_id = $1 ORDER BY k.id`, [reserva.id]).then(l => l.map(({ items, respuesta, ...k }: any) => k)),
       this.correos.listar({ reservaId: reserva.id }),
-      this.db.query(`SELECT fecha, usuario, accion, descripcion FROM bitacora WHERE entidad = 'reserva' AND entidad_id = $1 ORDER BY fecha, id`, [reserva.codigo])
+      this.db.query(`SELECT fecha, usuario, accion, descripcion FROM bitacora WHERE entidad = 'reserva' AND entidad_id = $1 ORDER BY fecha, id`, [reserva.codigo]),
+      this.db.query('SELECT * FROM consumos WHERE reserva_id = $1 ORDER BY id', [reserva.id])
     ]);
-    return { reserva, pagos, devoluciones, cambios, comprobantes, correos, historial };
+    return { reserva, pagos, devoluciones, cambios, comprobantes, correos, historial, consumos };
   }
 
   @Post('reservas')
