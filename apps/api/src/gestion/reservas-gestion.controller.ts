@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { cambioHabitacionSchema, hoyLima, pagoSchema, redondear, reservaPanelSchema } from '@marea/shared';
 import { z } from 'zod';
 import { Db } from '../db/db.service';
@@ -11,6 +11,7 @@ import { Correos } from '../correo/correos.service';
 import type { PoolClient } from 'pg';
 import { PagosService, ReservaBloqueada } from '../pagos/pagos.service';
 import { dmy, ReservasService, SQL_RESERVA } from '../reservas/reservas.service';
+import { SQL_COMPROBANTE } from '../facturacion/consultas';
 
 /** Reservas del panel: recepción, alta (teléfono, WhatsApp, walk-in), check-in/out, cancelación, pagos y cambio de habitación. */
 @Controller('gestion')
@@ -40,18 +41,20 @@ export class ReservasGestionController {
   async detalle(@Param('codigo') codigo: string) {
     const reserva = await this.db.uno<any>(SQL_RESERVA + ' WHERE r.codigo = $1', [codigo.toUpperCase()]);
     if (!reserva) throw falla(404, 'Reserva no encontrada.');
-    const [pagos, cambios, comprobantes, correos, historial] = await Promise.all([
-      this.db.query(`SELECT id, monto, moneda, tipo_cambio, monto_soles, metodo, referencia, estado, fecha_pago, registrado_por, motivo_anulacion, pasarela
-        FROM pagos WHERE reserva_id = $1 ORDER BY fecha_pago`, [reserva.id]),
+    const [pagos, devoluciones, cambios, comprobantes, correos, historial] = await Promise.all([
+      this.db.query(`SELECT p.id, p.monto, p.moneda, p.tipo_cambio, p.monto_soles, p.metodo, p.referencia, p.estado, p.fecha_pago, p.registrado_por, p.motivo_anulacion, p.pasarela,
+          p.monto_soles - coalesce((SELECT sum(dv.monto) FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida'), 0) AS disponible_devolucion
+        FROM pagos p WHERE p.reserva_id = $1 ORDER BY p.fecha_pago`, [reserva.id]),
+      this.db.query(`SELECT id, pago_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha, fecha_resultado
+        FROM devoluciones WHERE reserva_id = $1 ORDER BY id`, [reserva.id]),
       this.db.query(`SELECT ch.fecha, ch.desde, ha.numero AS habitacion_anterior, hn.numero AS habitacion_nueva, ch.tarifa, ch.total_anterior, ch.total_nuevo, ch.motivo, ch.registrado_por
         FROM cambios_habitacion ch JOIN habitaciones ha ON ha.id = ch.habitacion_anterior_id JOIN habitaciones hn ON hn.id = ch.habitacion_nueva_id
         WHERE ch.reserva_id = $1 ORDER BY ch.fecha`, [reserva.id]),
-      this.db.query(`SELECT id, tipo, serie, numero, fecha_emision, cliente_nombre, cliente_num_doc, total, estado, mensaje, proveedor, enlace_pdf, enlace_xml, enlace_cdr, motivo_anulacion
-        FROM comprobantes WHERE reserva_id = $1 ORDER BY id`, [reserva.id]),
+      this.db.query(`${SQL_COMPROBANTE} WHERE k.reserva_id = $1 ORDER BY k.id`, [reserva.id]).then(l => l.map(({ items, respuesta, ...k }: any) => k)),
       this.correos.listar({ reservaId: reserva.id }),
       this.db.query(`SELECT fecha, usuario, accion, descripcion FROM bitacora WHERE entidad = 'reserva' AND entidad_id = $1 ORDER BY fecha, id`, [reserva.codigo])
     ]);
-    return { reserva, pagos, cambios, comprobantes, correos, historial };
+    return { reserva, pagos, devoluciones, cambios, comprobantes, correos, historial };
   }
 
   @Post('reservas')
@@ -153,13 +156,5 @@ export class ReservasGestionController {
   @Post('reservas/:codigo/reenviar-confirmacion') @HttpCode(200)
   reenviar(@Param('codigo') codigo: string) {
     return this.reservas.reenviarConfirmacion(codigo);
-  }
-
-  @Post('correos/:id/reintentar') @HttpCode(200)
-  async reintentarCorreo(@Param('id', ParseIntPipe) id: number) {
-    const r = await this.correos.reintentar(id);
-    if (!r) throw falla(409, 'Solo se reintentan correos fallidos.');
-    await this.bitacora.registrar({ accion: 'correo.reintentar', entidad: 'correo', entidadId: id, descripcion: `Reintento del correo «${r.asunto}» a ${r.para}` });
-    return { id, mensaje: `El correo a ${r.para} volvió a la cola de envío.` };
   }
 }

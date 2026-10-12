@@ -1,5 +1,5 @@
 import { createHmac } from 'crypto';
-import { Culqi, ErrorPasarela, firmaMercadoPagoValida, MercadoPago, Niubiz, Orden } from './pasarelas';
+import { Culqi, ErrorPasarela, firmaMercadoPagoValida, MercadoPago, Niubiz, Orden, Resultado } from './pasarelas';
 
 /** Contratos de las pasarelas con fetch simulado: qué se envía y cómo se interpreta cada respuesta. */
 const orden: Orden = { id: '0b7f6a7e-4a43-4c39-9a35-1b2a6f0c9d11', numero: 1234, monto: 900, email: 'ana@correo.pe', codigoReserva: 'MA2600042', titular: 'Ana Quispe', expira: new Date('2026-10-11T20:00:00Z') };
@@ -33,11 +33,29 @@ describe('Culqi', () => {
     const r = await Culqi.cobrar(orden, 'ype_test_abc123');
     expect(r).toMatchObject({ aprobado: false, metodo: 'Yape', mensaje: 'Tu tarjeta no tiene fondos suficientes.' });
   });
-  it('3-D Secure pendiente no es un cobro; un 5xx es un error transitorio', async () => {
+  it('3-D Secure: REVIEW pide autenticar; el segundo cargo lleva el mismo token, el dispositivo y los parámetros 3DS', async () => {
     respuestas({ status: 200, json: { action_code: 'REVIEW', user_message: 'Validación requerida' } });
-    expect((await Culqi.cobrar(orden, 'tkn_test_abc123')).aprobado).toBe(false);
+    expect(await Culqi.cobrar(orden, 'tkn_test_abc123', { dispositivo: 'disp-1' })).toEqual({ requiere3DS: true });
+    expect(cuerpo(0).antifraud_details).toEqual({ device_finger_print_id: 'disp-1' });
+    const p3ds = { eci: '05', xid: 'eHg=', cavv: 'Y2F2dg==', protocolVersion: '2.1.0', directoryServerTransactionId: 'ds-1' };
+    respuestas({ status: 201, json: { object: 'charge', id: 'chr_test_2', amount: 90000 } });
+    const r = await Culqi.cobrar(orden, 'tkn_test_abc123', { dispositivo: 'disp-1', autenticacion: p3ds }) as Resultado;
+    expect(cuerpo(0)).toMatchObject({ source_id: 'tkn_test_abc123', antifraud_details: { device_finger_print_id: 'disp-1' }, authentication_3DS: p3ds });
+    expect(r).toMatchObject({ aprobado: true, referencia: 'chr_test_2', respuesta: { autenticado3DS: true } });
+    // Si después de autenticar vuelve a pedir revisión, no se cobra
+    respuestas({ status: 200, json: { action_code: 'REVIEW' } });
+    expect(await Culqi.cobrar(orden, 'tkn_test_abc123', { autenticacion: p3ds })).toMatchObject({ aprobado: false });
     respuestas({ status: 503, json: {} });
     await expect(Culqi.cobrar(orden, 'tkn_test_abc123')).rejects.toBeInstanceOf(ErrorPasarela);
+  });
+  it('devolución: POST /v2/refunds en céntimos con el cargo; un rechazo devuelve el mensaje', async () => {
+    respuestas({ status: 201, json: { object: 'refund', id: 'ref_test_1', amount: 20000, charge_id: 'chr_test_1' } });
+    expect(await Culqi.devolver('chr_test_1', 200)).toMatchObject({ estado: 'Completada', referencia: 'ref_test_1' });
+    expect(llamadas[0].url).toBe('https://api.culqi.com/v2/refunds');
+    expect(cuerpo(0)).toEqual({ amount: 20000, charge_id: 'chr_test_1', reason: 'solicitud_comprador' });
+    respuestas({ status: 400, json: { object: 'error', type: 'parameter_error', merchant_message: 'El monto supera lo cobrado' } });
+    expect(await Culqi.devolver('chr_test_1', 99999)).toMatchObject({ estado: 'Fallida', mensaje: 'El monto supera lo cobrado' });
+    expect((await Culqi.devolver('SIM-12', 10)).estado).toBe('Fallida');   // no es un cargo de Culqi: no se llama a la API
   });
 });
 
@@ -59,6 +77,17 @@ describe('Mercado Pago', () => {
     respuestas({ json: { id: 97, status: 'in_process', external_reference: orden.id } });
     expect((await MercadoPago.consultar('97')).resultado).toBeNull();
     await expect(MercadoPago.consultar('../../otro')).rejects.toBeInstanceOf(ErrorPasarela);
+  });
+  it('devolución parcial con clave de idempotencia; approved = completada, in_process = pendiente', async () => {
+    respuestas({ status: 201, json: { id: 1009042015, payment_id: 99, amount: 150, status: 'approved' } });
+    expect(await MercadoPago.devolver('99', 150, 'marea-devolucion-7')).toMatchObject({ estado: 'Completada', referencia: '1009042015' });
+    expect(llamadas[0].url).toBe('https://api.mercadopago.com/v1/payments/99/refunds');
+    expect(llamadas[0].init.headers['X-Idempotency-Key']).toBe('marea-devolucion-7');
+    expect(cuerpo(0)).toEqual({ amount: 150 });
+    respuestas({ status: 201, json: { id: 1, status: 'in_process' } });
+    expect((await MercadoPago.devolver('99', 150, 'k')).estado).toBe('Pendiente');
+    respuestas({ status: 400, json: { message: 'Payment too old to be refunded', cause: [{ code: 2024 }] } });
+    expect(await MercadoPago.devolver('99', 150, 'k')).toMatchObject({ estado: 'Fallida', respuesta: { codigo: 2024 } });
   });
   it('valida la firma x-signature del webhook (HMAC-SHA256 del manifiesto)', () => {
     const secreto = 'mi-secreto', ts = '1704908010', requestId = 'bb56a2f1-6aae-46ac-982e-9dcd3581d08e';

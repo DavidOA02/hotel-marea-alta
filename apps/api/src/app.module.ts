@@ -9,7 +9,10 @@ import { SesionGuard } from './auth/guards';
 import { middlewareContexto } from './comun/contexto';
 import { FiltroErrores } from './comun/errores';
 import { LimiteGuard } from './comun/limite.guard';
+import { CorreosController } from './correo/correos.controller';
 import { Correos } from './correo/correos.service';
+import { EncuestasController } from './correo/encuestas.controller';
+import { CorreosProgramados } from './correo/programados.service';
 import { Db } from './db/db.service';
 import { FacturacionController } from './facturacion/facturacion.controller';
 import { Facturacion } from './facturacion/facturacion.service';
@@ -21,17 +24,20 @@ import { PagosController } from './gestion/pagos.controller';
 import { ReservasGestionController } from './gestion/reservas-gestion.controller';
 import { PagosEnLineaController } from './pagos-en-linea/pagos-en-linea.controller';
 import { PagosEnLinea } from './pagos-en-linea/pagos-en-linea.service';
+import { Devoluciones } from './pagos/devoluciones.service';
 import { PagosService } from './pagos/pagos.service';
 import { PublicoController } from './publico/publico.controller';
 import { ReservasService } from './reservas/reservas.service';
 
 const CONTROLADORES = [PublicoController, AuthController, ReservasGestionController, HabitacionesController, ClientesController,
-  PagosController, MetricasController, AdminController, BitacoraController, PagosEnLineaController, FacturacionController];
+  PagosController, MetricasController, AdminController, BitacoraController, PagosEnLineaController, FacturacionController,
+  CorreosController, EncuestasController];
 
 @Module({
   imports: [JwtModule.register({})],
   controllers: CONTROLADORES,
   providers: [Db, AuthService, ReservasService, SesionGuard, Bitacora, Correos, PagosService, PagosEnLinea, Facturacion,
+    Devoluciones, CorreosProgramados,
     { provide: APP_GUARD, useClass: LimiteGuard },
     { provide: APP_FILTER, useClass: FiltroErrores }]
 })

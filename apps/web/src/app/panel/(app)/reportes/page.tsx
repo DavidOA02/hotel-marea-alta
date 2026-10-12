@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { CalendarCheck, Coins, Moon, PieChart as Torta, Printer, Receipt, Tag, TrendingUp, XOctagon } from 'lucide-react';
+import { CalendarCheck, Coins, Moon, PieChart as Torta, Printer, Receipt, Smile, Star, Tag, TrendingUp, XOctagon } from 'lucide-react';
 import { ETIQUETAS, hoyLima, sumarDias } from '@marea/shared';
 import { entero, fechaMedia, mesCorto, pct, soles, soles0, solesCorto } from '@/lib/formato';
 import { BotonP, Cabecera, Cargando, descargarCsv, Kpi, Tarjeta, useDatos } from '@/components/panel/base';
@@ -14,6 +14,7 @@ export default function Reportes() {
     d90: ['Últimos 90 días', sumarDias(hoy, -89), hoy], anio: ['Este año', hoy.slice(0, 4) + '-01-01', hoy] };
   const [r, setR] = useState<[string, string]>([mesIni, hoy]);
   const { datos: d, error } = useDatos<any>(`/gestion/reportes?desde=${r[0]}&hasta=${r[1]}`);
+  const { datos: en } = useDatos<any>(`/gestion/encuestas?desde=${r[0]}&hasta=${r[1]}`);
   const csv = () => d && descargarCsv(`reporte-${d.desde}-${d.hasta}.csv`, [['Indicador', 'Valor'], ['Desde', d.desde], ['Hasta', d.hasta], ['Ocupación', d.ocupacion], ['ADR', d.adr], ['RevPAR', d.revpar],
     ['Ingresos', d.ingresos], ['Cobrado', d.cobrado], ['Reservas', d.reservas], ['Canceladas', d.canceladas], ['No show', d.noShow], ['IGV', d.igv], [],
     ['Mes', 'Noches', 'Ocupación', 'ADR', 'RevPAR', 'Ingresos'], ...d.porMes.map((x: any) => [x.mes, x.noches, x.ocupacion, x.adr, x.revpar, x.ingresos]), [],
@@ -35,7 +36,7 @@ export default function Reportes() {
           <Kpi icono={Torta} etiqueta="Ocupación" valor={pct(d.ocupacion, 1)} sub={`${entero(d.nochesOcupadas)} de ${entero(d.nochesDisponibles)} noches`} barra={d.ocupacion} />
           <Kpi icono={Tag} tono="info" etiqueta="ADR · tarifa promedio" valor={soles(d.adr)} sub="Ingreso por noche ocupada" />
           <Kpi icono={TrendingUp} tono="ok" etiqueta="RevPAR" valor={soles(d.revpar)} sub="Ingreso por habitación disponible" />
-          <Kpi icono={Coins} tono="ok" etiqueta="Ingresos de habitaciones" valor={soles0(d.ingresos)} sub={`Cobrado: ${soles0(d.cobrado)}`} />
+          <Kpi icono={Coins} tono="ok" etiqueta="Ingresos de habitaciones" valor={soles0(d.ingresos)} sub={`Cobrado neto: ${soles0(d.cobrado)}${d.devuelto ? ` (devuelto ${soles0(d.devuelto)})` : ''}`} />
           <Kpi icono={CalendarCheck} etiqueta="Reservas con llegada" valor={d.reservas} sub={`${d.reservasEfectivas} efectivas`} />
           <Kpi icono={XOctagon} tono={d.tasaCancelacion > 0.1 ? 'bad' : 'warn'} etiqueta="Cancelación + no show" valor={pct(d.tasaCancelacion, 1)} sub={`${d.canceladas} canceladas · ${d.noShow} no show`} />
           <Kpi icono={Moon} tono="info" etiqueta="Estadía promedio" valor={`${d.estadiaPromedio} noches`} sub={`Anticipación: ${d.anticipacionPromedio} días`} />
@@ -73,7 +74,32 @@ export default function Reportes() {
             <ol className="divide-y divide-line">{d.topClientes.map((x: any, i: number) => <li key={x.clienteId} className="flex items-center justify-between px-5 py-2.5 text-sm"><span><span className="mr-3 text-muted">{i + 1}.</span><a className="hover:underline" href={`/panel/clientes/${x.clienteId}`}>{x.cliente}</a></span><span className="tabular-nums">{x.reservas} res. · {soles(x.total)}</span></li>)}</ol>
           </Tarjeta>
         </div>
+        {en && <SatisfaccionHuespedes en={en} />}
       </>}
     </>
+  );
+}
+
+/** Encuesta tras el check-out: calificación promedio, NPS (promotores 9–10 menos detractores 0–6) y comentarios. */
+function SatisfaccionHuespedes({ en }: { en: any }) {
+  const max = Math.max(1, ...en.distribucion.map((x: any) => x.cantidad));
+  return (
+    <Tarjeta titulo="Satisfacción de los huéspedes" icono={Smile} className="mt-4">
+      {!en.respondidas ? <p className="text-sm text-muted">{en.enviadas ? `Se enviaron ${en.enviadas} encuesta(s) en el periodo; aún sin respuestas.` : 'Sin encuestas en el periodo. Se envían solas entre 2 horas y 3 días después del check-out.'}</p> : (
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid content-start gap-3">
+            <Kpi icono={Star} tono="gold" etiqueta="Calificación promedio" valor={`${en.calificacion.toFixed(1)} / 5`} sub={`${en.respondidas} de ${en.enviadas} respondieron (${pct(en.tasaRespuesta)})`} />
+            <Kpi icono={Smile} tono={en.nps >= 50 ? 'ok' : en.nps >= 0 ? 'warn' : 'bad'} etiqueta="NPS" valor={en.nps} sub={`${en.promotores} promotores · ${en.pasivos} pasivos · ${en.detractores} detractores`} />
+          </div>
+          <div aria-label="Distribución de calificaciones" role="img" className="grid content-start gap-2">
+            {[...en.distribucion].reverse().map((x: any) => <div key={x.estrellas} className="flex items-center gap-2 text-sm"><span className="w-10 text-muted">{x.estrellas} ★</span>
+              <span className="h-2.5 flex-1 overflow-hidden rounded-full bg-[#ECEAE4]"><span className="block h-full rounded-full bg-gold" style={{ width: `${(x.cantidad / max) * 100}%` }} /></span><span className="w-6 text-right tabular-nums">{x.cantidad}</span></div>)}
+          </div>
+          <ul className="grid max-h-64 content-start gap-3 overflow-y-auto text-sm" aria-label="Comentarios">
+            {en.comentarios.length ? en.comentarios.map((c: any, i: number) => <li key={i} className="border-l-2 border-gold pl-3">«{c.comentario}»<span className="block text-xs text-muted">{c.cliente} · {c.calificacion} ★ · {fechaMedia(c.fecha)}</span></li>)
+              : <li className="text-muted">Sin comentarios escritos.</li>}
+          </ul>
+        </div>)}
+    </Tarjeta>
   );
 }

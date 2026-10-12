@@ -43,10 +43,12 @@ export class MetricasController {
     });
     const mes = meses[5];
     const n = async (sql: string, p: unknown[] = []) => (await this.db.uno<{ n: number }>(sql, p))!.n;
+    // Cobrado neto: pagos aprobados menos devoluciones completadas en el mismo periodo
     const cobrado = await this.db.uno<{ hoy: number; mes: number }>(`SELECT
-      coalesce(sum(monto_soles) FILTER (WHERE (fecha_pago AT TIME ZONE 'America/Lima')::date = $1), 0) AS hoy,
-      coalesce(sum(monto_soles) FILTER (WHERE (fecha_pago AT TIME ZONE 'America/Lima')::date >= $2), 0) AS mes
-      FROM pagos WHERE estado = 'Aprobado'`, [hoy, iniMes]);
+      coalesce(sum(monto) FILTER (WHERE (fecha AT TIME ZONE 'America/Lima')::date = $1), 0) AS hoy,
+      coalesce(sum(monto) FILTER (WHERE (fecha AT TIME ZONE 'America/Lima')::date >= $2), 0) AS mes
+      FROM (SELECT monto_soles AS monto, fecha_pago AS fecha FROM pagos WHERE estado = 'Aprobado'
+            UNION ALL SELECT -monto, fecha_resultado FROM devoluciones WHERE estado = 'Completada') m`, [hoy, iniMes]);
     return {
       hoy,
       habitaciones: { operativas, ocupadas, libres: Math.max(0, operativas - ocupadas), mantenimiento: habs.filter(h => h.estado !== 'Operativa').length,
@@ -58,7 +60,7 @@ export class MetricasController {
       reservasHoy: await n(`SELECT count(*) AS n FROM reservas WHERE (fecha_reserva AT TIME ZONE 'America/Lima')::date = $1`, [hoy]),
       ingresosMes: mes.ingresos, adrMes: dividir(mes.ingresos, mes.noches, 2), ocupacionMes: mes.ocupacion,
       cobradoHoy: cobrado!.hoy, cobradoMes: cobrado!.mes,
-      saldoEnCasa: await n(`SELECT coalesce(sum(greatest(r.total - coalesce((SELECT sum(monto_soles) FROM pagos WHERE reserva_id = r.id AND estado = 'Aprobado'), 0), 0)), 0) AS n
+      saldoEnCasa: await n(`SELECT coalesce(sum(greatest(r.total - coalesce(pagado_neto(r.id), 0), 0)), 0) AS n
         FROM reservas r WHERE r.estado = 'CheckIn'`),
       reclamosPendientes: await n(`SELECT count(*) AS n FROM reclamaciones WHERE estado = 'Pendiente'`),
       reclamosPorVencer: await n(`SELECT count(*) AS n FROM reclamaciones WHERE estado = 'Pendiente' AND fecha_limite_respuesta <= $1`, [sumarDias(hoy, 3)]),
@@ -101,6 +103,8 @@ export class MetricasController {
     }, {})) as any[];
     const pagos = await this.db.query<any>(`SELECT metodo, sum(monto_soles) AS monto, count(*) AS cantidad FROM pagos
       WHERE estado = 'Aprobado' AND (fecha_pago AT TIME ZONE 'America/Lima')::date BETWEEN $1 AND $2 GROUP BY metodo ORDER BY 2 DESC`, [d, h]);
+    const { devuelto } = (await this.db.uno<{ devuelto: number }>(`SELECT coalesce(sum(monto), 0) AS devuelto FROM devoluciones
+      WHERE estado = 'Completada' AND (fecha_resultado AT TIME ZONE 'America/Lima')::date BETWEEN $1 AND $2`, [d, h]))!;
     const top = Object.values(llegEf.reduce((a: any, x) => { a[x.clienteId] ??= { clienteId: x.clienteId, cliente: x.cliente, reservas: 0, total: 0 };
       a[x.clienteId].reservas++; a[x.clienteId].total = redondear(a[x.clienteId].total + x.total); return a; }, {})).sort((a: any, b: any) => b.total - a.total).slice(0, 10);
     return {
@@ -110,7 +114,7 @@ export class MetricasController {
       estadiaPromedio: llegEf.length ? redondear(llegEf.reduce((s, x) => s + x.noches, 0) / llegEf.length) : 0,
       anticipacionPromedio: llegEf.length ? Number((llegEf.reduce((s, x) => s + diasEntre(new Date(x.fechaReserva).toISOString().slice(0, 10), x.entrada), 0) / llegEf.length).toFixed(1)) : 0,
       igv: redondear(llegEf.reduce((s, x) => s + x.igv, 0)), ventasExoneradas: redondear(llegEf.filter(x => x.exoneradoIgv).reduce((s, x) => s + x.total, 0)),
-      cobrado: redondear(pagos.reduce((s, x) => s + x.monto, 0)),
+      cobrado: redondear(pagos.reduce((s, x) => s + x.monto, 0) - devuelto), devuelto,
       porTipo: tipos.map(t => { const s = sumarEstadias(ef.filter(e => e.tipo === t.nombre), d, hx);
         return { tipo: t.nombre, habitaciones: t.operativas, noches: s.noches, ingresos: s.ingreso, ocupacion: dividir(s.noches, t.operativas * dias), adr: dividir(s.ingreso, s.noches, 2) }; })
         .sort((a, b) => b.ingresos - a.ingresos),

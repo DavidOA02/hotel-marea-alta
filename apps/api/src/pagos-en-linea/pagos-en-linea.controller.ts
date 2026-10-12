@@ -9,6 +9,13 @@ import { urlWeb } from '../config/env';
 import { PagosEnLinea } from './pagos-en-linea.service';
 import { Culqi, firmaMercadoPagoValida, MercadoPago, Niubiz, Simulada } from './pasarelas';
 
+const texto3DS = z.string().trim().max(200);
+const culqiSchema = z.object({
+  token: z.string().regex(/^(tkn|ype)_[A-Za-z0-9_]{6,80}$/, 'Token de Culqi no válido.'),
+  dispositivo: z.string().trim().max(100).optional().nullable(),
+  autenticacion3DS: z.object({ eci: texto3DS, xid: texto3DS, cavv: texto3DS, protocolVersion: texto3DS, directoryServerTransactionId: texto3DS.optional() }).optional().nullable()
+});
+
 /** Pagos en línea desde la web pública (Mi reserva → página de pago). */
 @Controller()
 export class PagosEnLineaController {
@@ -34,12 +41,18 @@ export class PagosEnLineaController {
     return this.pagos.ver(id);
   }
 
-  /** Culqi Checkout entrega un token (tarjeta o Yape) y aquí se crea el cargo. */
+  /**
+   * Culqi Checkout entrega un token (tarjeta o Yape) y aquí se crea el cargo. Si el banco pide 3-D Secure,
+   * se responde «requiere3DS»: el navegador autentica con Culqi3DS y vuelve a llamar con «autenticacion3DS».
+   */
   @Post('pagos-en-linea/:id/culqi') @HttpCode(200) @Limite(10)
-  async culqi(@Param('id') id: string, @Body(new ZodPipe(z.object({ token: z.string().regex(/^(tkn|ype)_[A-Za-z0-9_]{6,80}$/, 'Token de Culqi no válido.') }))) d: { token: string }) {
+  async culqi(@Param('id') id: string, @Body(new ZodPipe(culqiSchema)) d: z.output<typeof culqiSchema>) {
     const o = await this.pagos.paraCobrar(id, 'Culqi');
-    try { await this.pagos.finalizar(id, await Culqi.cobrar(o, d.token)); }
-    catch (e) { await this.pagos.anotar(id, e); throw falla(502, 'No pudimos confirmar el pago con Culqi. Si se hizo el cargo, el hotel lo verá; escríbenos antes de reintentar.'); }
+    try {
+      const r = await Culqi.cobrar(o, d.token, { dispositivo: d.dispositivo, autenticacion: d.autenticacion3DS });
+      if ('requiere3DS' in r) return { ...(await this.pagos.ver(id)), requiere3DS: true };
+      await this.pagos.finalizar(id, r);
+    } catch (e) { await this.pagos.anotar(id, e); throw falla(502, 'No pudimos confirmar el pago con Culqi. Si se hizo el cargo, el hotel lo verá; escríbenos antes de reintentar.'); }
     return this.pagos.ver(id);
   }
 

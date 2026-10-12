@@ -3,7 +3,9 @@ import { createTransport, type Transporter } from 'nodemailer';
 import { Db, Ejecutor } from '../db/db.service';
 import type { Mensaje } from './plantillas';
 
-export type TipoCorreo = 'confirmacion' | 'cancelacion' | 'pago' | 'reclamo_constancia' | 'reclamo_respuesta' | 'comprobante';
+export type TipoCorreo = 'confirmacion' | 'cancelacion' | 'pago' | 'devolucion' | 'reclamo_constancia' | 'reclamo_respuesta' | 'comprobante' | 'recordatorio' | 'encuesta';
+/** Como máximo uno por reserva (índice único ux_correos_programados). */
+const PROGRAMADOS: TipoCorreo[] = ['recordatorio', 'encuesta'];
 const MAX_INTENTOS = 5;
 const ESPERAS_MIN = [1, 5, 15, 60];   // reintentos: 1 min, 5 min, 15 min, 1 h
 
@@ -40,12 +42,17 @@ export class Correos implements OnModuleInit, OnModuleDestroy {
 
   private automatico() { return process.env.PROCESOS_EN_SEGUNDO_PLANO !== 'false'; }
 
-  /** Guarda un correo en la bandeja. Con `c` queda dentro de la transacción de la operación. */
+  /**
+   * Guarda un correo en la bandeja. Con `c` queda dentro de la transacción de la operación.
+   * Los programados (recordatorio, encuesta) se ignoran si la reserva ya tiene uno: devuelve null.
+   */
   async encolar(m: Mensaje & { tipo: TipoCorreo; para: string; reservaId?: number | null; reclamacionId?: number | null }, c?: Ejecutor) {
     const r = await this.db.uno<{ id: number }>(`INSERT INTO correos (tipo, para, asunto, html, texto, reserva_id, reclamacion_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [m.tipo, m.para, m.asunto.slice(0, 200), m.html, m.texto, m.reservaId ?? null, m.reclamacionId ?? null], c);
-    this.programar();
-    return r!.id;
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ${PROGRAMADOS.includes(m.tipo) ? "ON CONFLICT (reserva_id, tipo) WHERE tipo IN ('recordatorio','encuesta') DO NOTHING" : ''} RETURNING id`,
+      [m.tipo, m.para, m.asunto.slice(0, 200), m.html, m.texto, m.reservaId ?? null, m.reclamacionId ?? null], c);
+    if (r) this.programar();
+    return r?.id ?? null;
   }
 
   /** Procesa la bandeja en unos milisegundos (después del COMMIT de la operación que encoló). */
@@ -107,6 +114,42 @@ export class Correos implements OnModuleInit, OnModuleDestroy {
       WHERE id = $1 AND estado = 'Fallido' RETURNING id, para, asunto`, [id]);
     if (r) this.programar();
     return r;
+  }
+
+  /** Vuelve a poner en la cola todos los correos fallidos (p. ej. tras corregir la configuración SMTP). */
+  async reintentarFallidos() {
+    const r = await this.db.query("UPDATE correos SET estado = 'Pendiente', intentos = 0, proximo_intento = now(), error = NULL WHERE estado = 'Fallido' RETURNING id");
+    if (r.length) this.programar();
+    return r.length;
+  }
+
+  /** Estado de la bandeja para la campana de alertas y el panel de correos. */
+  async resumen() {
+    const r = (await this.db.uno<any>(`SELECT count(*) FILTER (WHERE estado = 'Fallido') AS fallidos,
+        count(*) FILTER (WHERE estado = 'Pendiente' AND fecha_creacion < now() - interval '30 minutes') AS atrasados,
+        count(*) FILTER (WHERE estado = 'Pendiente') AS pendientes,
+        count(*) FILTER (WHERE estado IN ('Enviado','Simulado') AND fecha_envio > now() - interval '24 hours') AS enviados_24h,
+        max(fecha_envio) AS ultimo_envio FROM correos`))!;
+    return { ...r, smtp: process.env.SMTP_HOST || null };
+  }
+
+  /** Búsqueda para el panel de correos (sin el cuerpo). */
+  buscar(f: { estado?: string; tipo?: string; desde: string; hastaExcl: string; buscar?: string; limite: number }) {
+    const p: unknown[] = [f.desde, f.hastaExcl];
+    const w = ["(k.fecha_creacion AT TIME ZONE 'America/Lima') >= $1::date", "(k.fecha_creacion AT TIME ZONE 'America/Lima') < $2::date"];
+    if (f.estado) { p.push(f.estado); w.push(`k.estado = $${p.length}`); }
+    if (f.tipo) { p.push(f.tipo); w.push(`k.tipo = $${p.length}`); }
+    if (f.buscar?.trim()) { p.push(`%${f.buscar.trim()}%`); w.push(`(k.para ILIKE $${p.length} OR k.asunto ILIKE $${p.length} OR r.codigo ILIKE $${p.length} OR rc.numero ILIKE $${p.length})`); }
+    p.push(f.limite);
+    return this.db.query(`SELECT k.id, k.tipo, k.para, k.asunto, k.estado, k.intentos, k.error, k.fecha_creacion, k.fecha_envio, k.proximo_intento,
+        r.codigo AS codigo_reserva, rc.numero AS numero_reclamo
+      FROM correos k LEFT JOIN reservas r ON r.id = k.reserva_id LEFT JOIN reclamaciones rc ON rc.id = k.reclamacion_id
+      WHERE ${w.join(' AND ')} ORDER BY k.id DESC LIMIT $${p.length}`, p);
+  }
+
+  ver(id: number) {
+    return this.db.uno(`SELECT k.*, r.codigo AS codigo_reserva, rc.numero AS numero_reclamo FROM correos k
+      LEFT JOIN reservas r ON r.id = k.reserva_id LEFT JOIN reclamaciones rc ON rc.id = k.reclamacion_id WHERE k.id = $1`, [id]);
   }
 
   /** Correos de una reserva o de una hoja de reclamación (para el panel). */

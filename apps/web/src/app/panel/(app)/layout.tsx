@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { BarChart3, Bell, BellRing, CalendarRange, ChevronDown, DoorOpen, ExternalLink, HelpCircle, Hourglass, LayoutDashboard, LogOut, Menu, NotebookText, ReceiptText, ScrollText, Search, Tags, UserCog, Users, Wallet, X } from 'lucide-react';
+import { BarChart3, Bell, BellRing, CalendarRange, ChevronDown, DoorOpen, ExternalLink, HelpCircle, Hourglass, LayoutDashboard, LogOut, Mail, Menu, NotebookText, ReceiptText, ScrollText, Search, Tags, UserCog, Users, Wallet, X } from 'lucide-react';
 import { hoyLima } from '@marea/shared';
 import { iniciales } from '@/lib/formato';
 import { apiPanel, useRefresco, useSesion } from '@/stores/sesion';
@@ -13,7 +13,7 @@ import { Emblema } from '@/components/logo';
 const MINUTOS_INACTIVIDAD = Number(process.env.NEXT_PUBLIC_PANEL_INACTIVIDAD_MIN || 30);
 const MENU = [
   { grupo: 'General', items: [['/panel/dashboard', 'Dashboard', LayoutDashboard], ['/panel/recepcion', 'Recepción', BellRing]] },
-  { grupo: 'Operación', items: [['/panel/reservas', 'Reservas', CalendarRange], ['/panel/habitaciones', 'Habitaciones', DoorOpen], ['/panel/clientes', 'Clientes', Users], ['/panel/caja', 'Caja y pagos', Wallet], ['/panel/comprobantes', 'Comprobantes', ReceiptText], ['/panel/reclamaciones', 'Reclamaciones', NotebookText]] },
+  { grupo: 'Operación', items: [['/panel/reservas', 'Reservas', CalendarRange], ['/panel/habitaciones', 'Habitaciones', DoorOpen], ['/panel/clientes', 'Clientes', Users], ['/panel/caja', 'Caja y pagos', Wallet], ['/panel/comprobantes', 'Comprobantes', ReceiptText], ['/panel/reclamaciones', 'Reclamaciones', NotebookText], ['/panel/correos', 'Correos', Mail]] },
   { grupo: 'Administración', admin: true, items: [['/panel/reportes', 'Reportes', BarChart3], ['/panel/tarifas', 'Tipos y tarifas', Tags], ['/panel/usuarios', 'Usuarios', UserCog], ['/panel/bitacora', 'Bitácora', ScrollText]] }
 ] as const;
 const SOLO_ADMIN = ['/panel/reportes', '/panel/tarifas', '/panel/usuarios', '/panel/bitacora'];
@@ -142,9 +142,11 @@ function Alertas() {
   const [items, setItems] = useState<[number, string, string][]>([]);
   const [abierto, setAbierto] = useState(false);
   useEffect(() => {
-    const cargar = () => Promise.all([apiPanel('/gestion/recepcion'), apiPanel('/gestion/reclamaciones?estado=Pendiente')]).then(([r, rc]: any) => {
+    const cargar = () => Promise.all([apiPanel('/gestion/recepcion'), apiPanel('/gestion/reclamaciones?estado=Pendiente'), apiPanel('/gestion/correos/resumen').catch(() => null)]).then(([r, rc, co]: any) => {
       const hoy = hoyLima(); const venc = rc.filter((x: any) => x.fechaLimiteRespuesta < hoy).length;
-      setItems(([[r.llegadas.length, `${r.llegadas.length} llegada(s) pendientes de check-in`, '/panel/recepcion'],
+      setItems(([[co?.fallidos ?? 0, `${co?.fallidos} correo(s) no se pudieron enviar`, '/panel/correos?estado=Fallido'],
+        [co?.atrasados ?? 0, `${co?.atrasados} correo(s) llevan más de 30 min en cola`, '/panel/correos?estado=Pendiente'],
+        [r.llegadas.length, `${r.llegadas.length} llegada(s) pendientes de check-in`, '/panel/recepcion'],
         [r.salidas.length, `${r.salidas.length} salida(s) de hoy`, '/panel/recepcion'], [r.limpieza.length, `${r.limpieza.length} habitación(es) por limpiar`, '/panel/habitaciones'],
         [venc, `${venc} reclamo(s) con plazo vencido`, '/panel/reclamaciones'], [rc.length - venc, `${rc.length - venc} reclamo(s) por responder`, '/panel/reclamaciones']] as [number, string, string][]).filter(x => x[0] > 0));
     }).catch(() => {});
@@ -200,11 +202,11 @@ function Guia({ abierto, alCerrar, admin }: { abierto: boolean; alCerrar: () => 
     ['Teléfono y walk-in', 'Usa «Nueva reserva» o «Walk-in» (con check-in inmediato). El sistema asigna la habitación y calcula el IGV.'],
     ['Cambio de habitación', 'En la ficha pulsa «Cambiar habitación»: elige una libre, decide si se mantiene o se recalcula la tarifa y anota el motivo. Si el huésped ya está en el hotel, la habitación anterior pasa a «Por limpiar».'],
     ['Comprobante electrónico', 'Con la reserva pagada, en la ficha pulsa «Emitir»: boleta con el documento del huésped o factura con RUC. A los extranjeros exonerados se les emite factura de exportación.'],
-    ['Correos', 'La confirmación, la cancelación, los pagos en línea y los comprobantes se envían solos. En la ficha ves si llegaron y puedes reenviar la confirmación.'],
+    ['Correos', 'La confirmación, la cancelación, los pagos, el recordatorio dos días antes de la llegada, la encuesta tras el check-out y los comprobantes se envían solos. En «Correos» ves los que fallaron (la campana avisa) y puedes reintentarlos.'],
     ['Confirmación en PDF', 'En la ficha de la reserva pulsa PDF para entregar o enviar la confirmación al huésped.'],
     ['Buscar rápido', 'Pulsa la tecla / y escribe un código, nombre, documento o correo.'],
     ['Seguridad', `La sesión se cierra tras ${MINUTOS_INACTIVIDAD} minutos sin actividad. Cada pago y reserva queda registrado con tu nombre.`],
-    ...(admin ? [['Reportes y tarifas', 'Ocupación, ADR y RevPAR por periodo. Los cambios de tarifa solo afectan a reservas nuevas.'], ['Usuarios y reclamos', 'Crea cuentas con contraseña temporal. Responde los reclamos dentro de 15 días hábiles: la respuesta se envía sola al correo del consumidor.'], ['Bitácora', 'Revisa quién hizo cada cambio (tarifas, pagos anulados, usuarios, check-out con saldo…). Los registros no se pueden borrar.']] : [])
+    ...(admin ? [['Reportes y tarifas', 'Ocupación, ADR y RevPAR por periodo. Los cambios de tarifa solo afectan a reservas nuevas.'], ['Usuarios y reclamos', 'Crea cuentas con contraseña temporal. Responde los reclamos dentro de 15 días hábiles: la respuesta se envía sola al correo del consumidor.'], ['Devoluciones y notas de crédito', 'En la ficha, «Devolver» en el pago devuelve el dinero (por Culqi o Mercado Pago, o registrando efectivo o transferencia). Si es un descuento y ya hay boleta o factura, se emite sola la nota de crédito. Pasados 7 días un comprobante ya no se da de baja: usa «Nota de crédito».'], ['Bitácora', 'Revisa quién hizo cada cambio (tarifas, pagos anulados, devoluciones, usuarios, check-out con saldo…). Los registros no se pueden borrar.'], ['Encuestas', 'En Reportes ves la calificación promedio, el NPS y los comentarios de los huéspedes.']] : [])
   ];
   return (
     <Modal abierto={abierto} alCerrar={alCerrar} titulo={`Guía rápida · ${admin ? 'Administrador' : 'Recepción'}`} ancho="max-w-2xl" pie={<BotonP onClick={alCerrar}>Entendido</BotonP>}>

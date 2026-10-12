@@ -138,6 +138,32 @@ export const comprobanteSchema = z.object({
 export type ComprobanteInput = z.input<typeof comprobanteSchema>;
 export const anularComprobanteSchema = z.object({ motivo });
 
+/** Nota de crédito: los motivos 01, 02 y 06 anulan todo; el 09 (disminución en el valor) es por un monto. */
+export const notaCreditoSchema = z.object({
+  motivo: z.enum(['01', '02', '06', '09'], { error: 'Elige el motivo de la nota de crédito.' }),
+  monto: z.preprocess(v => (v === '' || v === null || v === undefined ? null : v), z.coerce.number().positive('El monto debe ser mayor a cero.').max(1_000_000).nullable()),
+  sustento: z.string({ error: 'Explica el sustento.' }).trim().min(5, 'El sustento debe tener al menos 5 caracteres.').max(250, 'Máximo 250 caracteres.')
+}).superRefine((d, ctx) => {
+  if (d.motivo === '09' && !d.monto) ctx.addIssue({ code: 'custom', message: 'Indica el monto a disminuir.', path: ['monto'] });
+});
+export type NotaCreditoInput = z.input<typeof notaCreditoSchema>;
+
+/** Devolución de un pago. «reducirTotal» = descuento o noches no usadas (baja el total de la reserva). */
+export const devolucionSchema = z.object({
+  monto: z.coerce.number({ error: 'Escribe el monto.' }).positive('El monto debe ser mayor a cero.').max(1_000_000),
+  motivo,
+  reducirTotal: z.boolean().default(false)
+});
+export type DevolucionInput = z.input<typeof devolucionSchema>;
+
+/** Encuesta tras la estadía: calificación de 1 a 5 y recomendación de 0 a 10 (NPS). */
+export const encuestaSchema = z.object({
+  calificacion: z.coerce.number({ error: 'Elige una calificación.' }).int().min(1, 'Elige una calificación.').max(5),
+  recomendacion: z.coerce.number({ error: 'Elige un número del 0 al 10.' }).int().min(0, 'Elige un número del 0 al 10.').max(10),
+  comentario: opcional(1000)
+});
+export type EncuestaInput = z.input<typeof encuestaSchema>;
+
 /* ---------------- Autenticación y usuarios ---------------- */
 const claveFuerte = z.string().min(8, 'La contraseña debe tener al menos 8 caracteres.')
   .refine(v => /\d/.test(v) && /[A-Za-z]/.test(v), 'La contraseña debe incluir letras y números.');

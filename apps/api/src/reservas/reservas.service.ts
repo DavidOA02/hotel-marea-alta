@@ -7,6 +7,7 @@ import { Bitacora } from '../auditoria/bitacora.service';
 import { Correos } from '../correo/correos.service';
 import { cancelacionReserva, confirmacionReserva, soles } from '../correo/plantillas';
 import { pasarelaActiva } from '../config/env';
+import { SQL_VIGENTE } from '../facturacion/consultas';
 
 export interface DatosCliente {
   nombres: string; apellidos: string; tipoDocumento: string; numeroDocumento: string;
@@ -29,7 +30,7 @@ export const SQL_LIBRES = `
     AND NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.estado IN ('Confirmada','CheckIn')
                     AND ${SQL_OCUPA} && daterange($2::date, $3::date))`;
 
-/** Proyección única de reserva (lista y detalle). */
+/** Proyección única de reserva (lista y detalle). Pagado = pagos aprobados − devoluciones completadas (función pagado_neto). */
 export const SQL_RESERVA = `
   SELECT r.id, r.codigo, r.estado, r.canal, r.cliente_id, c.nombres || ' ' || c.apellidos AS cliente,
          c.tipo_documento || ' ' || c.numero_documento AS documento, c.email, '+' || c.codigo_pais || ' ' || c.telefono AS telefono,
@@ -39,7 +40,7 @@ export const SQL_RESERVA = `
          r.fecha_check_out, r.fecha_cancelacion, r.registrado_por
   FROM reservas r JOIN clientes c ON c.id = r.cliente_id JOIN habitaciones h ON h.id = r.habitacion_id
   JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
-  LEFT JOIN LATERAL (SELECT sum(monto_soles) AS pagado FROM pagos WHERE reserva_id = r.id AND estado = 'Aprobado') p ON true`;
+  LEFT JOIN LATERAL (SELECT pagado_neto(r.id) AS pagado) p ON true`;
 
 export const dmy = (iso: string) => iso.split('-').reverse().join('/');
 
@@ -193,7 +194,7 @@ export class ReservasService {
     const r = await this.db.uno<any>(`
       SELECT r.id, r.codigo, r.estado, r.fecha_entrada, r.fecha_salida, r.noches, r.huespedes, r.subtotal, r.igv, r.total, r.exonerado_igv,
              r.habitacion_id, h.numero AS habitacion, h.tipo_habitacion_id AS tipo_id, t.nombre AS tipo_habitacion,
-             EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND k.estado NOT IN ('Rechazado','Anulado')) AS tiene_comprobante
+             EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND ${SQL_VIGENTE}) AS tiene_comprobante
       FROM reservas r JOIN habitaciones h ON h.id = r.habitacion_id JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id
       WHERE r.codigo = $1 ${c ? 'FOR UPDATE OF r' : ''}`, [codigo.toUpperCase()], c);
     if (!r) throw falla(404, 'Reserva no encontrada.');
@@ -253,7 +254,7 @@ export class ReservasService {
         descripcion: `Cambio de habitación ${r.habitacion} → ${nueva.numero} desde el ${dmy(r.desde)} (${tarifa}). Motivo: ${d.motivo}`,
         datos: { de: r.habitacion, a: nueva.numero, desde: r.desde, tarifa: d.tarifa, totalAnterior: r.total, totalNuevo: importe.total, motivo: d.motivo } }, c);
 
-      const { pagado } = (await this.db.uno<{ pagado: number }>(`SELECT coalesce(sum(monto_soles), 0) AS pagado FROM pagos WHERE reserva_id = $1 AND estado = 'Aprobado'`, [r.id], c))!;
+      const { pagado } = (await this.db.uno<{ pagado: number }>('SELECT pagado_neto($1) AS pagado', [r.id], c))!;
       const saldo = redondear(importe.total - pagado);
       const avisos = [r.estado === 'CheckIn' ? `La habitación ${r.habitacion} pasó a «Por limpiar».` : null,
         saldo < -0.009 ? `El huésped tiene un saldo a favor de ${soles(-saldo)}.` : null].filter(Boolean);

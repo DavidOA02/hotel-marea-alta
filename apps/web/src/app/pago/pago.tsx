@@ -11,7 +11,7 @@ interface Orden {
   id: string; numero: number; estado: 'Pendiente' | 'Aprobado' | 'Rechazado'; vencida: boolean; pasarela: 'Simulada' | 'Culqi' | 'MercadoPago' | 'Niubiz';
   monto: number; codigoReserva: string; titular: string; email: string; mensaje: string | null; datosCheckout: Record<string, any> | null;
 }
-declare global { interface Window { CulqiCheckout?: any; VisanetCheckout?: any } }
+declare global { interface Window { CulqiCheckout?: any; Culqi3DS?: any; VisanetCheckout?: any } }
 
 const NOMBRE: Record<string, string> = { Simulada: 'Pasarela simulada', Culqi: 'Culqi', MercadoPago: 'Mercado Pago', Niubiz: 'Niubiz' };
 const cargarScript = (src: string) => new Promise<void>((ok, mal) => {
@@ -60,10 +60,32 @@ export function Pago() {
     } catch (e) { avisar((e as Error).message, 'error'); } finally { setOcupado(false); }
   };
   const simular = (aprobar: boolean) => ejecutar(() => api(`/pagos-en-linea/${id}/simulada`, { method: 'POST', body: { aprobar } }));
+  /** Crea el cargo en la API. Si el banco pide 3-D Secure, Culqi3DS autentica al titular y se reintenta con sus parámetros. */
+  const cobrarCulqi = (token: string, dispositivo: string | null, autenticacion3DS?: Record<string, string>) => ejecutar(async () => {
+    const r = await api<{ requiere3DS?: boolean }>(`/pagos-en-linea/${id}/culqi`, { method: 'POST', body: { token, dispositivo, autenticacion3DS } });
+    if (!r.requiere3DS || autenticacion3DS) return;
+    // Culqi3DS abre la ventana del banco y responde con window.postMessage desde esta misma página
+    const escuchar = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const { parameters3DS, error } = e.data ?? {};
+      if (parameters3DS) { window.removeEventListener('message', escuchar); cobrarCulqi(token, dispositivo, parameters3DS); }
+      else if (error) { window.removeEventListener('message', escuchar); avisar(String(error), 'error'); }
+    };
+    window.addEventListener('message', escuchar, false);
+    avisar('Tu banco pide confirmar la compra (3-D Secure). Sigue las instrucciones de la ventana.', 'warn');
+    await window.Culqi3DS.initAuthentication(token);
+  });
   const culqi = async () => {
     try {
       const d = o!.datosCheckout!;
-      await cargarScript(d.script);
+      await Promise.all([cargarScript(d.script), cargarScript(d.script3DS)]);
+      // Culqi3DS: huella del dispositivo para el antifraude y autenticación del titular si el banco la pide
+      const tds = window.Culqi3DS;
+      tds.reset?.();
+      tds.publicKey = d.llavePublica;
+      tds.settings = { charge: { totalAmount: d.montoCentimos, returnUrl: window.location.href, currency: 'PEN' }, card: { email: o!.email } };
+      tds.options = { showModal: true, showLoading: true, showIcon: true, closeModalAction: () => undefined, style: { btnColor: '#12303A', btnTextColor: '#FFFFFF' } };
+      const dispositivo: string | null = await tds.generateDevice().catch(() => null);
       const pasarela = new window.CulqiCheckout(d.llavePublica, {
         settings: { title: 'Hotel Marea Alta', currency: 'PEN', amount: d.montoCentimos },
         client: { email: o!.email },
@@ -71,7 +93,7 @@ export function Pago() {
       });
       // Culqi tokeniza en el navegador; el cargo lo crea la API con la llave secreta
       pasarela.culqi = () => {
-        if (pasarela.token) { const token = pasarela.token.id; pasarela.close(); ejecutar(() => api(`/pagos-en-linea/${id}/culqi`, { method: 'POST', body: { token } })); }
+        if (pasarela.token) { const token = pasarela.token.id; pasarela.close(); cobrarCulqi(token, dispositivo); }
         else if (pasarela.error) { pasarela.close(); avisar(pasarela.error.user_message ?? 'Culqi no pudo procesar el pago.', 'error'); }
       };
       pasarela.open();

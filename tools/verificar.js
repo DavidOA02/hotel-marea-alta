@@ -27,10 +27,10 @@ const puertoAbierto = (host, port) => new Promise(r => { const s = net.connect({
       const { Client } = require(require.resolve('pg', { paths: [path.join(RAIZ, 'apps/api')] }));
       const cl = new Client({ host, port, user: env.PGUSER || 'postgres', password: env.PGPASSWORD ?? 'postgres', database: env.PGDATABASE || 'hotel_marea_alta', connectionTimeoutMillis: 3000 });
       await cl.connect();
-      const { rows } = await cl.query(`SELECT to_regclass('public.reservas') IS NOT NULL AS base, to_regclass('public.bitacora') IS NOT NULL AND to_regclass('public.comprobantes') IS NOT NULL AS mejoras`);
+      const { rows } = await cl.query(`SELECT to_regclass('public.reservas') IS NOT NULL AS base, to_regclass('public.bitacora') IS NOT NULL AND to_regclass('public.devoluciones') IS NOT NULL AND to_regclass('public.encuestas') IS NOT NULL AS mejoras`);
       await cl.end();
       if (!rows[0].base) mal('La base de datos está vacía', 'npm run db:demo');
-      else rows[0].mejoras ? ok('Base de datos al día', '(bitácora, correos, pagos en línea y facturación)') : mal('A la base le faltan las tablas de las mejoras', 'npm run db:migrar   (no borra datos)');
+      else rows[0].mejoras ? ok('Base de datos al día', '(bitácora, correos, pagos, devoluciones, facturación y encuestas)') : mal('A la base le faltan las tablas de las mejoras', 'npm run db:migrar   (no borra datos)');
     } catch { /* sin acceso a la base: npm run db lo resuelve */ }
   } else mal(`PostgreSQL no responde en ${host}:${port}`, 'Instálalo (winget install PostgreSQL.PostgreSQL.17) o inicia su servicio', 'Luego: npm run db:demo');
   for (const [p, n] of [[4000, 'API'], [3000, 'web']]) if (await puertoAbierto('127.0.0.1', p)) mal(`El puerto ${p} (${n}) ya está en uso`, '¿Tienes otra ventana con «npm run dev» abierta?');

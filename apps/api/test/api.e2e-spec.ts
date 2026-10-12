@@ -7,6 +7,7 @@ import { Correos } from '../src/correo/correos.service';
 import { Db } from '../src/db/db.service';
 import { PagosEnLinea } from '../src/pagos-en-linea/pagos-en-linea.service';
 import { Simulada } from '../src/pagos-en-linea/pasarelas';
+import { CorreosProgramados } from '../src/correo/programados.service';
 
 process.env.PGDATABASE = 'hotel_marea_alta_test';
 process.env.SIN_LIMITES = 'true';
@@ -418,6 +419,189 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(e.datos).not.toMatch(/PBKDF2|OtraClave2026/);
       await expect(db().query(`UPDATE bitacora SET descripcion = 'alterado'`)).rejects.toThrow(/no se puede modificar ni borrar/);
       await expect(db().query(`DELETE FROM bitacora`)).rejects.toThrow(/no se puede modificar ni borrar/);
+    });
+  });
+  /* ============================== Segunda tanda de mejoras ============================== */
+  const reservaPagada = async (extra: object) => { const r = await reservaPanel(extra); await pagarTodo(r.codigo); return r; };
+  const boleta = async (codigo: string) => (await http.post(`/api/gestion/reservas/${codigo}/comprobante`).set(R()).send({ tipo: 'Boleta' }).expect(201)).body;
+  const nota = (id: number, d: object) => http.post(`/api/gestion/comprobantes/${id}/nota-credito`).set(A()).send(d);
+  const pagoDe = async (codigo: string) => (await ficha(codigo)).pagos.find((p: any) => p.estado === 'Aprobado');
+
+  describe('Notas de crédito', () => {
+    it('parcial (09) rebaja la reserva; la total (01) neutraliza el comprobante y permite emitir otro', async () => {
+      const r = await reservaPagada({ tipoHabitacion: 'duna', fechaEntrada: d(120), fechaSalida: d(122) });
+      const b = await boleta(r.codigo);
+      await http.post(`/api/gestion/comprobantes/${b.id}/nota-credito`).set(R()).send({ motivo: '01', sustento: 'Prueba de permisos' }).expect(403);
+      expect((await nota(b.id, { motivo: '02', sustento: 'RUC errado' }).expect(400)).body.campo).toBe('motivo');   // solo facturas
+      expect((await nota(b.id, { motivo: '09', monto: 1000, sustento: 'Demasiado' }).expect(409)).body.campo).toBe('monto');
+      expect((await nota(b.id, { motivo: '09', monto: 900, sustento: 'Todo el monto' }).expect(409)).body.campo).toBe('monto');
+
+      const n1 = (await nota(b.id, { motivo: '09', monto: 200, sustento: 'Descuento por ruido nocturno' }).expect(201)).body;
+      expect(n1).toMatchObject({ tipo: '07', serie: 'BC01', numero: 1, estado: 'Aceptado', motivoNota: '09', refSerie: 'B001', refNumero: b.numero, total: 200, gravada: 169.49, igv: 30.51 });
+      let f = await ficha(r.codigo);
+      expect(f.reserva).toMatchObject({ total: 700, subtotal: 593.22, igv: 106.78, pagado: 900, saldo: -200 });
+      expect(f.comprobantes.find((k: any) => k.id === b.id).disponibleNota).toBe(700);
+      await http.post(`/api/gestion/comprobantes/${b.id}/anular`).set(A()).send({ motivo: 'Ya tiene nota' }).expect(409);   // con notas no hay baja
+
+      const n2 = (await nota(b.id, { motivo: '01', sustento: 'Datos del huésped errados' }).expect(201)).body;
+      expect(n2).toMatchObject({ serie: 'BC01', numero: 2, total: 700, motivoNota: '01' });
+      f = await ficha(r.codigo);
+      expect(f.comprobantes.find((k: any) => k.id === b.id)).toMatchObject({ estado: 'Aceptado', anuladoConNota: 'BC01-2', disponibleNota: 0 });
+      expect(f.reserva.total).toBe(700);   // la nota total no cambia el importe de la reserva
+      await nota(b.id, { motivo: '06', sustento: 'Otra nota más' }).expect(409);
+      await nota(n1.id, { motivo: '01', sustento: 'Nota sobre nota' }).expect(409);
+      const b2 = await boleta(r.codigo);   // neutralizada la anterior, se puede emitir otra por el total vigente
+      expect(b2).toMatchObject({ serie: 'B001', total: 700 });
+      expect(f.correos.filter((c: any) => c.tipo === 'comprobante')).toHaveLength(3);   // boleta + 2 notas
+
+      // Registro de ventas: las notas restan
+      const lista = (await http.get(`/api/gestion/comprobantes?desde=${hoy}&hasta=${hoy}`).set(A())).body;
+      const validos = lista.comprobantes.filter((k: any) => ['Aceptado', 'Observado'].includes(k.estado));
+      const esperado = Math.round(validos.reduce((s: number, k: any) => s + (k.tipo === '07' ? -k.total : k.total), 0) * 100) / 100;
+      expect(lista.totales.total).toBe(esperado);
+      expect(lista.totales.notas).toBe(2);
+    });
+
+    it('factura con RUC errado: nota 02 y nueva factura', async () => {
+      const r = await reservaPagada({ fechaEntrada: d(124), fechaSalida: d(125) });
+      const f1 = (await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Factura', ruc: '20111111111', razonSocial: 'Empresa Equivocada SAC', direccion: 'Lima' }).expect(201)).body;
+      const nc = (await nota(f1.id, { motivo: '02', sustento: 'El cliente indicó otro RUC' }).expect(201)).body;
+      expect(nc).toMatchObject({ serie: 'FC01', numero: 1, total: 650, motivoNota: '02', clienteNumDoc: '20111111111' });
+      const f2 = (await http.post(`/api/gestion/reservas/${r.codigo}/comprobante`).set(R()).send({ tipo: 'Factura', ruc: '20222222222', razonSocial: 'Empresa Correcta SAC', direccion: 'Ica' }).expect(201)).body;
+      expect(f2).toMatchObject({ serie: 'F001', clienteNumDoc: '20222222222', total: 650 });
+    });
+  });
+
+  describe('Devoluciones', () => {
+    it('manual (efectivo): límites, saldo, caja neta y pago no anulable', async () => {
+      const r = await reservaPagada({ tipoHabitacion: 'duna', fechaEntrada: d(126), fechaSalida: d(128) });
+      const p = await pagoDe(r.codigo);
+      await http.post(`/api/gestion/pagos/${p.id}/devolver`).set(R()).send({ monto: 100, motivo: 'Prueba de permisos' }).expect(403);
+      expect((await http.post(`/api/gestion/pagos/${p.id}/devolver`).set(A()).send({ monto: 901, motivo: 'Demasiado' }).expect(409)).body.campo).toBe('monto');
+      const dv = (await http.post(`/api/gestion/pagos/${p.id}/devolver`).set(A()).send({ monto: 300, motivo: 'Cobro duplicado en recepción' }).expect(200)).body;
+      expect(dv).toMatchObject({ medio: 'Manual', estado: 'Completada', monto: 300 });
+      const f = await ficha(r.codigo);
+      expect(f.reserva).toMatchObject({ total: 900, pagado: 600, saldo: 300 });
+      expect(f.pagos[0].disponibleDevolucion).toBe(600);
+      expect(f.devoluciones).toHaveLength(1);
+      expect(f.correos.map((c: any) => c.tipo)).toContain('devolucion');
+      const caja = (await http.get(`/api/gestion/pagos?desde=${hoy}&hasta=${hoy}`).set(A())).body;
+      expect(caja.devoluciones.some((x: any) => x.id === dv.id)).toBe(true);
+      expect(caja.neto).toBe(Math.round((caja.total - caja.devuelto) * 100) / 100);
+      await http.post(`/api/gestion/pagos/${p.id}/anular`).set(A()).send({ motivo: 'Ya tiene devolución' }).expect(409);
+    });
+
+    it('por la pasarela (simulada) como descuento sin comprobante: baja el total una sola vez', async () => {
+      const r = await http.post('/api/reservas').send(huesped(500, { tipoHabitacion: 'duna', fechaEntrada: d(130), fechaSalida: d(132) })).expect(201);
+      const o = (await http.post('/api/pagos-en-linea').send({ codigo: r.body.codigo, email: 'h500@prueba.pe' }).expect(201)).body;
+      await http.post(`/api/pagos-en-linea/${o.id}/simulada`).send({ aprobar: true }).expect(200);
+      const p = await pagoDe(r.body.codigo);
+      const dv = (await http.post(`/api/gestion/pagos/${p.id}/devolver`).set(A()).send({ monto: 450, motivo: 'Una noche no usada', reducirTotal: true }).expect(200)).body;
+      expect(dv).toMatchObject({ medio: 'Pasarela', pasarela: 'Simulada', estado: 'Completada', referenciaExterna: `SIM-DEV-${dv.id}`, notaCredito: null });
+      expect((await ficha(r.body.codigo)).reserva).toMatchObject({ total: 450, pagado: 450, saldo: 0 });
+    });
+
+    it('descuento con boleta emitida: la nota de crédito se emite sola y la reserva baja una sola vez', async () => {
+      const r = await reservaPagada({ tipoHabitacion: 'duna', fechaEntrada: d(134), fechaSalida: d(136) });
+      await boleta(r.codigo);
+      const p = await pagoDe(r.codigo);
+      const dv = (await http.post(`/api/gestion/pagos/${p.id}/devolver`).set(A()).send({ monto: 100, motivo: 'Compensación por reclamo', reducirTotal: true }).expect(200)).body;
+      expect(dv.notaCredito).toMatchObject({ tipo: '07', motivoNota: '09', total: 100, estado: 'Aceptado' });
+      const f = await ficha(r.codigo);
+      expect(f.reserva).toMatchObject({ total: 800, pagado: 800, saldo: 0 });
+      expect(f.comprobantes.filter((k: any) => k.tipo === '07')).toHaveLength(1);
+    });
+  });
+
+  describe('Culqi con 3-D Secure (API de Culqi simulada)', () => {
+    const fetchReal = global.fetch;
+    let cola: { status: number; json: unknown }[] = [];
+    const enviados: any[] = [];
+    beforeAll(() => {
+      Object.assign(process.env, { PASARELA: 'culqi', CULQI_LLAVE_PUBLICA: 'pk_test_e2e', CULQI_LLAVE_SECRETA: 'sk_test_e2e' });
+      global.fetch = jest.fn(async (url: any, init: any) => { enviados.push({ url: String(url), cuerpo: JSON.parse(init.body) }); const r = cola.shift()!; return new Response(JSON.stringify(r.json), { status: r.status }); }) as any;
+    });
+    afterAll(() => { global.fetch = fetchReal; process.env.PASARELA = 'simulada'; });
+
+    it('pide autenticar, cobra con los parámetros 3DS y luego devuelve por la API de Culqi', async () => {
+      const r = await http.post('/api/reservas').send(huesped(600, { tipoHabitacion: 'duna', fechaEntrada: d(138), fechaSalida: d(139) })).expect(201);
+      const o = (await http.post('/api/pagos-en-linea').send({ codigo: r.body.codigo, email: 'h600@prueba.pe' }).expect(201)).body;
+      expect((await http.get(`/api/pagos-en-linea/${o.id}`)).body.datosCheckout).toMatchObject({ llavePublica: 'pk_test_e2e', script3DS: 'https://3ds.culqi.com', montoCentimos: 45000 });
+
+      cola = [{ status: 200, json: { action_code: 'REVIEW' } }];
+      const a = (await http.post(`/api/pagos-en-linea/${o.id}/culqi`).send({ token: 'tkn_test_e2e123', dispositivo: 'disp-e2e' }).expect(200)).body;
+      expect(a).toMatchObject({ requiere3DS: true, estado: 'Pendiente' });
+
+      cola = [{ status: 201, json: { object: 'charge', id: 'chr_test_e2e', amount: 45000 } }];
+      const p3ds = { eci: '05', xid: 'eHg=', cavv: 'Y2F2dg==', protocolVersion: '2.1.0' };
+      const b = (await http.post(`/api/pagos-en-linea/${o.id}/culqi`).send({ token: 'tkn_test_e2e123', dispositivo: 'disp-e2e', autenticacion3DS: p3ds }).expect(200)).body;
+      expect(b.estado).toBe('Aprobado');
+      expect(enviados[1].cuerpo).toMatchObject({ source_id: 'tkn_test_e2e123', authentication_3DS: p3ds, antifraud_details: { device_finger_print_id: 'disp-e2e' } });
+
+      const p = await pagoDe(r.body.codigo);
+      expect(p).toMatchObject({ pasarela: 'Culqi', referencia: 'chr_test_e2e', montoSoles: 450 });
+      cola = [{ status: 201, json: { object: 'refund', id: 'ref_test_e2e', amount: 45000, charge_id: 'chr_test_e2e' } }];
+      const dv = (await http.post(`/api/gestion/pagos/${p.id}/devolver`).set(A()).send({ monto: 450, motivo: 'Cancelación con devolución' }).expect(200)).body;
+      expect(dv).toMatchObject({ medio: 'Pasarela', estado: 'Completada', referenciaExterna: 'ref_test_e2e' });
+      expect(enviados.at(-1)).toEqual({ url: 'https://api.culqi.com/v2/refunds', cuerpo: { amount: 45000, charge_id: 'chr_test_e2e', reason: 'solicitud_comprador' } });
+
+      // Sin respuesta de Culqi: la devolución queda pendiente y se puede reintentar
+      const r2 = await http.post('/api/reservas').send(huesped(601, { tipoHabitacion: 'duna', fechaEntrada: d(140), fechaSalida: d(141) })).expect(201);
+      const o2 = (await http.post('/api/pagos-en-linea').send({ codigo: r2.body.codigo, email: 'h601@prueba.pe' }).expect(201)).body;
+      cola = [{ status: 201, json: { object: 'charge', id: 'chr_test_e2e2', amount: 45000 } }];
+      await http.post(`/api/pagos-en-linea/${o2.id}/culqi`).send({ token: 'tkn_test_e2e456' }).expect(200);
+      const p2 = await pagoDe(r2.body.codigo);
+      cola = [{ status: 503, json: {} }];
+      const pend = (await http.post(`/api/gestion/pagos/${p2.id}/devolver`).set(A()).send({ monto: 100, motivo: 'Prueba sin red' }).expect(200)).body;
+      expect(pend.estado).toBe('Pendiente');
+      cola = [{ status: 201, json: { object: 'refund', id: 'ref_test_e2e2', amount: 10000 } }];
+      expect((await http.post(`/api/gestion/pagos/devoluciones/${pend.id}/reintentar`).set(A()).expect(200)).body.estado).toBe('Completada');
+    });
+  });
+
+  describe('Correos programados, encuestas y panel de correos', () => {
+    it('recordatorio dos días antes (una sola vez) y no para reservas recién hechas', async () => {
+      const [h] = await db().query<any>(`SELECT id FROM habitaciones WHERE numero = '110'`);
+      const [vieja] = await db().query<any>(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total, estado, canal, fecha_reserva)
+        VALUES ('MA9900010', 1, $1, $2, $3, 2, 381.36, 68.64, 450, 'Confirmada', 'Web', now() - interval '5 days') RETURNING id`, [h.id, d(2), d(3)]);
+      const nueva = await reservaPanel({ tipoHabitacion: 'horizonte', fechaEntrada: d(2), fechaSalida: d(3) });
+      const prog = app.get(CorreosProgramados);
+      expect((await prog.ejecutar()).recordatorios).toBe(1);
+      expect((await prog.ejecutar()).recordatorios).toBe(0);
+      const [c] = await db().query<any>(`SELECT count(*) AS n FROM correos WHERE reserva_id = $1 AND tipo = 'recordatorio'`, [vieja.id]);
+      expect(c.n).toBe(1);
+      expect((await ficha(nueva.codigo)).correos.map((x: any) => x.tipo)).not.toContain('recordatorio');
+    });
+
+    it('encuesta tras el check-out: se responde una vez y el administrador ve el NPS', async () => {
+      const [h] = await db().query<any>(`SELECT id FROM habitaciones WHERE numero = '110'`);
+      const [est] = await db().query<any>(`INSERT INTO reservas (codigo, cliente_id, habitacion_id, fecha_entrada, fecha_salida, huespedes, subtotal, igv, total, estado, canal, fecha_check_in, fecha_check_out)
+        VALUES ('MA9900011', 1, $1, $2, $3, 2, 762.71, 137.29, 900, 'CheckOut', 'Web', now() - interval '2 days', now() - interval '5 hours') RETURNING id`, [h.id, d(-2), hoy]);
+      expect((await app.get(CorreosProgramados).ejecutar()).encuestas).toBe(1);
+      const [{ token }] = await db().query<any>('SELECT token FROM encuestas WHERE reserva_id = $1', [est.id]);
+      await http.get('/api/encuestas/no-es-token').expect(404);
+      expect((await http.get(`/api/encuestas/${token}`).expect(200)).body).toMatchObject({ nombre: 'Huésped1', respondida: false });
+      expect((await http.post(`/api/encuestas/${token}`).send({ calificacion: 6, recomendacion: 10 }).expect(400)).body.campo).toBe('calificacion');
+      await http.post(`/api/encuestas/${token}`).send({ calificacion: 5, recomendacion: 10, comentario: 'La vista al mar, increíble.' }).expect(200);
+      await http.post(`/api/encuestas/${token}`).send({ calificacion: 1, recomendacion: 0 }).expect(409);
+      expect((await http.get(`/api/encuestas/${token}`)).body.respondida).toBe(true);
+      await http.get('/api/gestion/encuestas').set(R()).expect(403);
+      const res = (await http.get('/api/gestion/encuestas').set(A()).expect(200)).body;
+      expect(res).toMatchObject({ enviadas: 1, respondidas: 1, calificacion: 5, nps: 100, comentarios: [expect.objectContaining({ codigo: 'MA9900011', comentario: 'La vista al mar, increíble.' })] });
+    });
+
+    it('panel de correos: fallidos en el resumen (campana), vista previa y reintento de todos', async () => {
+      const [k] = await db().query<any>(`UPDATE correos SET estado = 'Fallido', error = '550 buzón inexistente', intentos = 5
+        WHERE id = (SELECT min(id) FROM correos WHERE tipo = 'confirmacion') RETURNING id`);
+      expect((await http.get('/api/gestion/correos/resumen').set(R()).expect(200)).body).toMatchObject({ fallidos: 1, smtp: null });
+      const lista = (await http.get('/api/gestion/correos?estado=Fallido').set(R()).expect(200)).body;
+      expect(lista).toEqual([expect.objectContaining({ id: k.id, error: '550 buzón inexistente' })]);
+      expect((await http.get(`/api/gestion/correos/${k.id}`).set(R()).expect(200)).body.html).toMatch(/^<!doctype html>/);
+      const tipos = (await http.get('/api/gestion/correos?tipo=encuesta').set(R())).body;
+      expect(tipos.length).toBeGreaterThan(0);
+      expect(tipos.every((c: any) => c.tipo === 'encuesta')).toBe(true);
+      expect((await http.post('/api/gestion/correos/reintentar-fallidos').set(R()).expect(200)).body.cantidad).toBe(1);
+      expect((await http.get('/api/gestion/correos/resumen').set(R())).body.fallidos).toBe(0);
     });
   });
 });

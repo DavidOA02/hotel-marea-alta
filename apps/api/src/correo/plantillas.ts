@@ -89,6 +89,45 @@ export function pagoRecibido(r: ReservaCorreo, p: { monto: number; pasarela: str
   };
 }
 
+export function recordatorioLlegada(r: ReservaCorreo & { residencia?: string }, pagoEnLinea: boolean): Mensaje {
+  const filas = filasReserva(r).filter(([k]) => !['Pagado', 'Total'].includes(k));
+  const pendiente = r.saldo > 0.009 ? `Saldo pendiente: ${soles(r.saldo)}. ${pagoEnLinea ? 'Puedes pagarlo ahora en línea desde «Mi reserva» o al llegar.' : 'Puedes pagarlo al llegar.'}` : 'Tu reserva está pagada.';
+  const consejos = [
+    'Estamos a unas 3 h 30 de Lima por la Panamericana Sur (salida a Paracas en el km 245).',
+    '¿A qué hora llegas? Escríbenos por WhatsApp y tendremos tu habitación lista.',
+    ...(r.residencia === 'EXT' || r.exoneradoIgv ? ['Presenta tu pasaporte y la Tarjeta Andina de Migración (TAM) para la exoneración de IGV.'] : ['Presenta tu documento de identidad al registrarte.'])
+  ];
+  return {
+    asunto: `Te esperamos el ${fechaLarga(r.fechaEntrada)} · Reserva ${r.codigo}`,
+    html: marco(`¡Ya casi, ${primerNombre(r.cliente)}!`, `<p>Faltan pocos días para tu llegada a Paracas. Te recordamos los datos de tu estadía:</p>${tabla(filas)}
+      <p>${esc(pendiente)}</p><ul style="padding-left:18px;color:${GRIS}">${consejos.map(c => `<li style="margin:4px 0">${esc(c)}</li>`).join('')}</ul>
+      ${boton('Ver mi reserva', enlaceReserva(r.codigo))}`),
+    texto: `¡Ya casi, ${primerNombre(r.cliente)}! Faltan pocos días para tu llegada.\n\n${textoTabla(filas)}\n\n${pendiente}\n\n${consejos.map(c => '· ' + c).join('\n')}\n\nMi reserva: ${enlaceReserva(r.codigo)}${pie()}`
+  };
+}
+
+export function encuestaEstadia(r: ReservaCorreo, token: string): Mensaje {
+  const enlace = `${urlWeb()}/encuesta?token=${encodeURIComponent(token)}`;
+  return {
+    asunto: `¿Cómo fue tu estadía en ${HOTEL.nombre}?`,
+    html: marco(`Gracias por tu visita, ${primerNombre(r.cliente)}`, `<p>Esperamos que hayas disfrutado de Paracas. ¿Nos ayudas a mejorar? Son dos preguntas y te toma menos de un minuto.</p>
+      ${boton('Responder la encuesta', enlace)}<p style="color:${GRIS};font-size:13px">Estadía ${esc(r.codigo)}: ${esc(r.tipoHabitacion)}, del ${esc(fechaLarga(r.fechaEntrada))} al ${esc(fechaLarga(r.fechaSalida))}.</p>`),
+    texto: `Gracias por tu visita, ${primerNombre(r.cliente)}. ¿Nos ayudas a mejorar? Responde la encuesta (menos de un minuto): ${enlace}${pie()}`
+  };
+}
+
+export function devolucionRealizada(r: ReservaCorreo, d: { monto: number; medio: string; pasarela: string | null; metodo: string; motivo: string }): Mensaje {
+  const como = d.medio === 'Pasarela'
+    ? `Devolvimos el importe a tu medio de pago a través de ${d.pasarela === 'MercadoPago' ? 'Mercado Pago' : d.pasarela}. Según tu banco, puede tardar algunos días hábiles en verse en tu estado de cuenta.`
+    : `Registramos la devolución por ${d.metodo.toLowerCase()}.`;
+  const filas: [string, string][] = [['Reserva', r.codigo], ['Monto devuelto', soles(d.monto)], ['Motivo', d.motivo]];
+  return {
+    asunto: `Devolución de ${soles(d.monto)} · Reserva ${r.codigo}`,
+    html: marco('Te devolvimos dinero', `<p>Hola ${esc(primerNombre(r.cliente))}:</p>${tabla(filas)}<p>${esc(como)}</p>`),
+    texto: `Te devolvimos dinero.\n\n${textoTabla(filas)}\n\n${como}${pie()}`
+  };
+}
+
 /** Datos de la hoja tal como están en la tabla reclamaciones. */
 export interface ReclamoCorreo {
   numero: string; fecha: string | Date; tipo: string; nombreCompleto: string; tipoDocumento: string; numeroDocumento: string; domicilio: string;
@@ -127,17 +166,19 @@ export function respuestaReclamo(h: ReclamoCorreo, respuesta: string): Mensaje {
 export interface ComprobanteCorreo {
   tipo: string; serie: string; numero: number; fechaEmision: string; clienteNombre: string; gravada: number; exportacion: number; igv: number; total: number;
   enlacePdf: string | null; enlaceXml: string | null; proveedor: string; codigoReserva: string;
+  /** Notas de crédito: comprobante que modifica y motivo. */
+  modifica?: string | null; motivoNota?: string | null;
 }
 export function comprobanteEmitido(c: ComprobanteCorreo): Mensaje {
-  const nombre = c.tipo === '01' ? 'Factura electrónica' : 'Boleta de venta electrónica';
+  const nombre = ({ '01': 'Factura electrónica', '03': 'Boleta de venta electrónica', '07': 'Nota de crédito electrónica' } as Record<string, string>)[c.tipo] ?? 'Comprobante electrónico';
   const filas: [string, string][] = [['Comprobante', `${nombre} ${c.serie}-${c.numero}`], ['Fecha de emisión', fechaLarga(c.fechaEmision)], ['Cliente', c.clienteNombre],
-    ['Reserva', c.codigoReserva], ...(c.exportacion > 0 ? [['Exportación de servicios', soles(c.exportacion)]] as [string, string][] : [['Op. gravada', soles(c.gravada)], ['IGV 18 %', soles(c.igv)]] as [string, string][]),
+    ['Reserva', c.codigoReserva], ...(c.modifica ? [['Modifica', c.modifica], ['Motivo', c.motivoNota ?? '']] as [string, string][] : []), ...(c.exportacion > 0 ? [['Exportación de servicios', soles(c.exportacion)]] as [string, string][] : [['Op. gravada', soles(c.gravada)], ['IGV 18 %', soles(c.igv)]] as [string, string][]),
     ['Importe total', soles(c.total)]];
   const simulado = c.proveedor === 'Simulado' ? 'Documento de PRUEBA emitido en modo simulado: no tiene validez tributaria.' : '';
   const enlaces = [c.enlacePdf && boton('Descargar PDF', c.enlacePdf), c.enlaceXml && `<p><a href="${esc(c.enlaceXml)}" style="color:${OCEANO}">Descargar XML</a></p>`].filter(Boolean).join('');
   return {
     asunto: `${nombre} ${c.serie}-${c.numero} · ${HOTEL.nombre}`,
-    html: marco(nombre, `<p>Adjuntamos los datos de tu comprobante electrónico.</p>${tabla(filas)}${enlaces}
+    html: marco(nombre, `<p>${c.modifica ? `Emitimos una nota de crédito que modifica tu ${esc(c.modifica)}.` : 'Adjuntamos los datos de tu comprobante electrónico.'}</p>${tabla(filas)}${enlaces}
       <p style="color:${GRIS};font-size:12px">${esc(simulado || 'Puedes verificar su validez en el portal de consulta de comprobantes de SUNAT.')}</p>`),
     texto: `${nombre} ${c.serie}-${c.numero}\n\n${textoTabla(filas)}${c.enlacePdf ? `\nPDF: ${c.enlacePdf}` : ''}${c.enlaceXml ? `\nXML: ${c.enlaceXml}` : ''}\n${simulado}${pie()}`
   };

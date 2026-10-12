@@ -120,7 +120,7 @@ La API abre el túnel con `ssh2` y se conecta a `PGHOST:PGPORT` desde el servido
 
 ### Jest
 - `packages/shared`: tarifas e IGV, recálculo por cambio de habitación, documentos, fechas hábiles, prorrateo de métricas y esquemas Zod.
-- `apps/api` (unitarias): contraseñas, política de cancelación y **contratos de las integraciones** con `fetch` simulado (Culqi, Mercado Pago y la firma de su webhook, Niubiz y Nubefact).
+- `apps/api` (unitarias): contraseñas, política de cancelación y **contratos de las integraciones** con `fetch` simulado (Culqi con 3-D Secure y devoluciones, Mercado Pago con la firma de su webhook y devoluciones, Niubiz y Nubefact con notas de crédito).
 - `apps/api/test` (de punta a punta, contra PostgreSQL real; leen `apps/api/.env` y fuerzan los modos simulados, así nunca envían correos ni cobran):
   - Reservas, validaciones y libro de reclamaciones.
   - Roles, bloqueo de cuenta y renovación de sesión.
@@ -128,10 +128,11 @@ La API abre el túnel con `ssh2` y se conecta a `PGHOST:PGPORT` desde el servido
   - Anulación de pagos, CRUD de habitaciones y clientes.
   - **Concurrencia**: 6 personas reservan a la vez las 4 suites y se confirman exactamente 4, sin cruces.
   - Correos encolados (y su HTML escapado), cambio de habitación (incluido el huésped en curso sin falsos cruces), pagos en línea **idempotentes** (avisos repetidos o simultáneos registran un solo pago), boletas, facturas y exportación con **correlativo sin huecos** aunque se emitan a la vez, y bitácora inmodificable.
+  - Notas de crédito parciales y totales, devoluciones manuales y por pasarela (también como descuento con nota de crédito automática), Culqi con 3-D Secure de punta a punta (con la API de Culqi simulada), recordatorio y encuesta sin duplicados, NPS y panel de correos.
 
 ---
 
-## Correos, pagos en línea, facturación, cambio de habitación y bitácora
+## Correos, pagos en línea, devoluciones, facturación, cambio de habitación, encuestas y bitácora
 
 Todo funciona en desarrollo **sin credenciales**: los correos quedan como «Simulado», la pasarela de pago es simulada (botones «aprobar» o «rechazar») y el OSE simulado acepta los comprobantes sin validez tributaria. En producción, los modos simulados se desactivan solos. Las variables están documentadas en `apps/api/.env.ejemplo`, y al arrancar la API muestra qué está activo.
 
@@ -141,11 +142,18 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
 - Se envían:
   - **Al reservar** (web o panel): la confirmación.
   - **Al cancelar**: el aviso de cancelación.
-  - **Con un pago en línea**: el recibo del pago.
-  - **Al aceptarse un comprobante**: el comprobante electrónico.
+  - **Con un pago en línea o una devolución**: el recibo.
+  - **Al aceptarse un comprobante o una nota de crédito**: el documento electrónico.
+  - **Dos días antes de la llegada**: un recordatorio con la hora de check-in, cómo llegar, el saldo pendiente y los documentos que debe traer. No se envía si la reserva se hizo el día anterior.
+  - **Entre 2 horas y 3 días después del check-out**: la encuesta de satisfacción.
   - **Por el Libro de Reclamaciones**: la constancia de la hoja y la **respuesta** que registra el administrador.
 - **Bandeja de salida** (tabla `correos`): el correo se guarda en la misma transacción que la operación y un proceso lo envía por SMTP (`nodemailer`) con reintentos (1, 5, 15 y 60 min). Un servidor de correo caído nunca hace fallar una reserva.
-- En la ficha de la reserva y en la hoja de reclamación se ve si cada correo se envió. Se puede reenviar la confirmación o reintentar un correo fallido.
+- **Correos programados** (`programados.service.ts`, cada 30 min): un índice único en la base garantiza **un solo** recordatorio y una sola encuesta por reserva, aunque la API corra en varias instancias. Se desactivan con `CORREOS_PROGRAMADOS=false`.
+- **Pantalla «Correos»**:
+  - Muestra la bandeja completa con filtros, el error de cada fallo y una vista previa (en un `iframe` aislado, sin scripts).
+  - Permite reintentar un correo o todos los fallidos, por ejemplo tras corregir el SMTP.
+  - La **campana** del panel avisa cuando hay correos fallidos o con más de 30 minutos en cola.
+- En la ficha de la reserva y en la hoja de reclamación se ve si cada correo se envió; desde la ficha se puede reenviar la confirmación.
 - Las plantillas escapan todo dato que escribe el usuario (evita inyección de HTML).
 
 ### Pagos en línea (`apps/api/src/pagos-en-linea`)
@@ -155,12 +163,26 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - El resultado **siempre se verifica con la pasarela**, nunca con lo que diga el navegador.
 - **Pasarelas** (`PASARELA=…`):
   - **Culqi**: Checkout Custom tokeniza la tarjeta o Yape en el navegador y la API crea el cargo con la llave secreta.
+    - **3-D Secure**: `Culqi3DS` genera la huella del dispositivo, que viaja en el cargo.
+    - Si el antifraude responde `REVIEW`, no hubo cargo. El navegador autentica al titular con su banco y la API repite el cargo con el mismo token y los parámetros 3DS (`eci`, `cavv`, `xid`…).
   - **Mercado Pago**: Checkout Pro por redirección. El pago se confirma consultando `/v1/payments` al volver y con el webhook `POST /api/webhooks/mercadopago`, que valida la firma `x-signature`.
   - **Niubiz**: botón de pago web. Primero se obtienen el token de seguridad y la sesión; luego el formulario de Niubiz envía el `transactionToken` a la API, que autoriza (`ACTION_CODE 000`) y devuelve al huésped a la web.
 - **Idempotente**: si la pasarela avisa dos veces (retorno y webhook), el pago se registra una sola vez. Un pago aprobado se registra aunque la orden haya vencido.
 - La reserva se **bloquea** mientras se registra cualquier pago, así dos cobros simultáneos (web y recepción) no superan el saldo.
 - Si aun así queda saldo a favor, se marca en la bitácora para devolverlo.
-- Anular en Caja un pago hecho por pasarela avisa que la devolución se hace desde el panel de la pasarela.
+
+### Devoluciones (`apps/api/src/pagos/devoluciones.service.ts`)
+- **Dónde**: ficha de la reserva → pago → **Devolver** (solo administrador).
+- **Cómo se devuelve**:
+  - **Culqi y Mercado Pago**: la devolución se pide por API, total o parcial. Mercado Pago usa una clave de idempotencia, así que reintentar no devuelve dos veces.
+  - **Niubiz, efectivo, transferencia, Yape…**: el hotel devuelve el dinero (Niubiz desde su portal) y lo registra en el sistema.
+- **Lo pagado** de una reserva es pagos aprobados menos devoluciones completadas, calculado en un solo lugar: la función SQL `pagado_neto`. La usan la ficha, la caja, el dashboard, los reportes y Power BI.
+- **Descuento o noches no usadas** («bajar el total de la reserva»):
+  - Rebaja el total de la reserva.
+  - Si ya hay boleta o factura aceptada, emite **en la misma transacción** la nota de crédito por ese monto.
+- **Caja**: muestra las devoluciones del periodo y el cobrado neto.
+- **Sin respuesta de la pasarela**: la devolución queda «Pendiente» y se puede reintentar.
+- Un pago con devoluciones ya no se puede anular.
 
 ### Facturación electrónica SUNAT (`apps/api/src/facturacion`)
 - **Cuándo**: con la reserva pagada por completo, en la ficha → **Emitir**.
@@ -174,8 +196,14 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - Las boletas quedan «Pendiente» hasta el resumen diario.
   - Un proceso consulta los pendientes cada 5 minutos, y también se puede pulsar «Actualizar estado».
   - Al aceptarse, el comprobante se envía por correo al cliente con sus enlaces PDF y XML.
-- **Anulación** (solo administrador): comunicación de baja hasta 7 días después de la emisión. Pasado ese plazo corresponde una nota de crédito, que aún no está incluida.
-- **Pantalla** «Comprobantes»: registro de ventas por fechas con totales (gravada, exportación, IGV) y CSV. Para Power BI está la vista `vw_comprobantes_powerbi`.
+- **Baja** (solo administrador): comunicación de baja hasta 7 días después de la emisión, si el comprobante no tiene notas de crédito.
+- **Notas de crédito** (solo administrador; ficha o pantalla «Comprobantes» → **Nota de crédito**):
+  - **Motivos** (catálogo 09 de SUNAT): 01 anulación de la operación, 02 error en el RUC (solo facturas), 06 devolución total y 09 disminución en el valor (por un monto).
+  - **Serie propia** (`BC01` para boletas, `FC01` para facturas). Cada nota modifica un solo comprobante, como exige SUNAT desde agosto de 2026.
+  - **Nota total (01, 02, 06)**: al aceptarse, el comprobante queda *neutralizado* (`anulado_con_nota_id`). Sigue siendo válido en SUNAT, la nota lo resta en el registro de ventas y se puede emitir otro, por ejemplo con el RUC correcto.
+  - **Nota parcial (09)**: baja el total de la reserva. Si SUNAT la rechaza, la rebaja se revierte.
+  - No mueven dinero: si hay que devolver, se hace desde el pago.
+- **Pantalla** «Comprobantes»: registro de ventas por fechas, donde las notas de crédito restan. Muestra totales (gravada, exportación, IGV) y exporta a CSV. Para Power BI está la vista `vw_comprobantes_powerbi` (columna `total_neto`).
 
 ### Cambio de habitación de una reserva en curso
 - **Dónde**: ficha de la reserva (confirmada o con el huésped en el hotel) → **Cambiar habitación**.
@@ -188,6 +216,14 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - La habitación anterior pasa a «Por limpiar».
 - **Historial** en `cambios_habitacion` y en la bitácora, con el motivo.
 
+### Encuesta de satisfacción
+- **Envío**: el correo tras el check-out lleva un enlace único (`/encuesta?token=…`, imposible de adivinar).
+- **Qué pregunta**: calificación de 1 a 5, recomendación de 0 a 10 y un comentario opcional. Se responde **una sola vez**.
+- **Resultados** (Reportes → «Satisfacción de los huéspedes», solo administrador):
+  - Calificación promedio, distribución y tasa de respuesta.
+  - **NPS**: promotores (9–10) menos detractores (0–6).
+  - Últimos comentarios.
+
 ### Bitácora de auditoría (`apps/api/src/auditoria`)
 - **Qué registra**: quién hizo qué, cuándo y desde qué IP.
   - Sesiones: ingresos, fallos y bloqueos.
@@ -195,6 +231,7 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
   - Check-out con saldo y cambios de habitación.
   - Tarifas, con el precio anterior y el nuevo.
   - Habitaciones, clientes y usuarios, con los campos que cambiaron.
+  - Devoluciones, notas de crédito y encuestas respondidas.
   - Reclamos, comprobantes y correos reenviados.
 - **Cómo**: el usuario y la IP salen de un contexto por petición (`AsyncLocalStorage`). El registro se guarda **en la misma transacción** que la operación.
 - **Solo inserción**: un trigger de PostgreSQL rechaza `UPDATE`, `DELETE` y `TRUNCATE`. Las contraseñas nunca se guardan; solo consta que fueron restablecidas.
@@ -202,10 +239,16 @@ Si ya tienes la base con datos, ejecuta `npm run db:migrar` (no borra nada).
 
 ### Antes de producción
 Las integraciones reales se escribieron según la documentación oficial y sus contratos están probados con `fetch` simulado. **Aún no se han probado contra los servicios reales**: valídalas con las cuentas de prueba (sandbox) de cada proveedor.
-- **Niubiz**: los campos antifraude `MDD` los define Niubiz para cada comercio; ajústalos en `pasarelas.ts`.
-- **Culqi**: las tarjetas que piden 3-D Secure se rechazan con un mensaje claro (el flujo 3DS no está implementado).
-- **Nubefact**: revisa con la cuenta DEMO los códigos de la exportación (`sunat_transaction`, `tipo_de_igv`, `total_inafecta` en `proveedores.ts`). Confirma con tu contador el tratamiento tributario del hospedaje a no domiciliados.
+- **Niubiz**:
+  - Los campos antifraude `MDD` los define Niubiz para cada comercio; ajústalos en `pasarelas.ts`.
+  - Las devoluciones se hacen en su portal y se registran en el sistema.
+- **Culqi**: prueba el 3-D Secure con las tarjetas de prueba que lo exigen. La documentación de Culqi se contradice sobre el código HTTP (200 o 201) del cargo que pide 3DS, así que la API decide por el cuerpo de la respuesta (`object: "charge"` o `action_code: "REVIEW"`).
+- **Nubefact**:
+  - Revisa con la cuenta DEMO los códigos de la exportación (`sunat_transaction`, `tipo_de_igv`, `total_inafecta`) y de las notas de crédito (`tipo_de_comprobante: 3`, `documento_que_se_modifica_*`, `tipo_de_nota_de_credito`, sustento en `observaciones`), todos en `proveedores.ts`.
+  - Registra en Nubefact las series de notas de crédito (`SERIE_NC_BOLETA`, `SERIE_NC_FACTURA`).
+  - Confirma con tu contador el tratamiento tributario del hospedaje a no domiciliados.
 - **Mercado Pago**: necesita `API_URL_PUBLICA` con HTTPS accesible desde Internet para los webhooks.
+- **Correos programados**: con datos de demostración (`npm run db:demo`) y SMTP configurado, se enviarían recordatorios y encuestas a correos ficticios. Usa `CORREOS_PROGRAMADOS=false` en ese caso.
 
 ---
 
@@ -240,7 +283,8 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
 | «El puerto 3000/4000 ya está en uso» | Cierra la otra ventana con `npm run dev` |
 | Error de CORS | Agrega tu URL en `CORS_ORIGENES` (`apps/api/.env`) |
 | «Cerramos tu sesión por inactividad» | Pasaron 30 min sin uso; ajusta `NEXT_PUBLIC_PANEL_INACTIVIDAD_MIN` en `apps/web/.env.local` |
-| Error `relation "bitacora" does not exist` (o `correos`, `comprobantes`…) | La base es anterior a las mejoras: ejecuta `npm run db:migrar` |
+| Error `relation "bitacora" does not exist`, `function pagado_neto does not exist` (o `devoluciones`, `encuestas`…) | La base es anterior a las mejoras: ejecuta `npm run db:migrar` |
+| La campana avisa de correos fallidos | Abre «Correos», revisa el error (dirección inexistente, SMTP rechazado…) y pulsa «Reintentar» |
 | Los correos aparecen como «Simulado» | No hay `SMTP_HOST` en `apps/api/.env`: se registran pero no se envían |
 | No aparece «Pagar en línea» | Revisa `PASARELA` y sus credenciales (al arrancar, la API indica qué pasarela está activa) |
 | `npm run test:e2e` falla por la contraseña de postgres | Las pruebas leen `apps/api/.env`: ejecuta antes `npm run db` para guardarla |
@@ -255,7 +299,7 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
 - **Usuarios**: cambia las contraseñas iniciales.
 
 ## Mejoras posibles
-- Notas de crédito electrónicas (anulación pasado el plazo de baja y devoluciones parciales).
-- Flujo 3-D Secure de Culqi y devoluciones automáticas desde el panel.
-- Recordatorio por correo dos días antes de la llegada y encuesta tras el check-out.
-- Panel de correos fallidos con alerta en la campana.
+- Notas de débito (penalidades y cargos adicionales, como el minibar o el late check-out).
+- Devoluciones por API de Niubiz (hoy se hacen en su portal y se registran en el sistema).
+- Consumos adicionales en la cuenta del huésped (restaurante, bar, tours) incluidos en el comprobante.
+- Correos en inglés para los huéspedes extranjeros.

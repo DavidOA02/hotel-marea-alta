@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
-import { anularComprobanteSchema, comprobanteSchema } from '@marea/shared';
+import { anularComprobanteSchema, comprobanteSchema, notaCreditoSchema } from '@marea/shared';
 import { z } from 'zod';
 import { falla } from '../comun/errores';
 import { ZodPipe } from '../comun/zod.pipe';
@@ -38,6 +38,12 @@ export class FacturacionController {
   @Post('comprobantes/:id/sincronizar') @HttpCode(200)
   sincronizar(@Param('id', ParseIntPipe) id: number) {
     return this.facturacion.sincronizar(id);
+  }
+
+  /** Nota de crédito: anulación total pasado el plazo de baja, error en el RUC o disminución parcial del valor. */
+  @Post('comprobantes/:id/nota-credito') @Roles('Administrador')
+  notaCredito(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(notaCreditoSchema)) d: z.output<typeof notaCreditoSchema>) {
+    return this.facturacion.emitirNota(id, d, u.nombre);
   }
 
   @Post('comprobantes/:id/anular') @HttpCode(200) @Roles('Administrador')

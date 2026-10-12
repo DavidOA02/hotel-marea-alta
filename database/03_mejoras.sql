@@ -4,7 +4,9 @@
 --  · Correos automáticos (bandeja de salida con reintentos)
 --  · Cambio de habitación de una reserva en curso
 --  · Pagos en línea (Niubiz, Culqi, Mercado Pago o pasarela simulada)
---  · Facturación electrónica SUNAT mediante un OSE
+--  · Facturación electrónica SUNAT mediante un OSE (boletas, facturas y notas de crédito)
+--  · Devoluciones de dinero (pasarela o manuales)
+--  · Recordatorio antes de la llegada y encuesta tras el check-out
 --  Lo aplican «npm run db», «npm run db:demo» y, sobre una base existente,
 --  «npm run db:migrar». Ejecutar DESPUÉS de 01_esquema.sql.
 -- =====================================================================
@@ -130,14 +132,17 @@ ALTER TABLE pagos ADD COLUMN IF NOT EXISTS pasarela varchar(20);
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS series_comprobante (
   serie   varchar(4)  PRIMARY KEY CHECK (serie ~ '^[FB][A-Z0-9]{3}$'),
-  tipo    varchar(2)  NOT NULL CHECK (tipo IN ('01','03')),
+  tipo    varchar(2)  NOT NULL CONSTRAINT ck_series_tipo CHECK (tipo IN ('01','03','07')),
   ultimo  int         NOT NULL DEFAULT 0 CHECK (ultimo >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS comprobantes (
   id                 int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   reserva_id         int           NOT NULL REFERENCES reservas(id),
-  tipo               varchar(2)    NOT NULL CHECK (tipo IN ('01','03')),       -- catálogo 01: 01 factura, 03 boleta
+  tipo               varchar(2)    NOT NULL CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('01','03','07')),   -- catálogo 01: 01 factura, 03 boleta, 07 nota de crédito
+  referencia_id      int           REFERENCES comprobantes(id),                -- nota de crédito: comprobante que modifica
+  motivo_nota        varchar(2),                                               -- catálogo 09: 01 anulación, 02 error en el RUC, 06 devolución total, 09 disminución en el valor
+  sustento           varchar(250),
   serie              varchar(4)    NOT NULL REFERENCES series_comprobante(serie),
   numero             int           NOT NULL,
   fecha_emision      date          NOT NULL,
@@ -169,16 +174,101 @@ CREATE TABLE IF NOT EXISTS comprobantes (
   motivo_anulacion   varchar(200),
   fecha_anulacion    timestamptz,
   UNIQUE (serie, numero),
-  CHECK (total = gravada + exportacion + igv)
+  CHECK (total = gravada + exportacion + igv),
+  CONSTRAINT ck_nota_referencia CHECK ((tipo = '07') = (referencia_id IS NOT NULL AND motivo_nota IS NOT NULL))
 );
-CREATE INDEX IF NOT EXISTS ix_comprobantes_reserva ON comprobantes (reserva_id);
-CREATE INDEX IF NOT EXISTS ix_comprobantes_fecha   ON comprobantes (fecha_emision);
--- Una reserva tiene como máximo un comprobante vigente (los rechazados o anulados no cuentan)
-CREATE UNIQUE INDEX IF NOT EXISTS ux_comprobante_vigente ON comprobantes (reserva_id) WHERE estado NOT IN ('Rechazado','Anulado');
 
--- Registro de ventas para Power BI
-CREATE OR REPLACE VIEW vw_comprobantes_powerbi AS
-SELECT c.id AS comprobante_id, CASE c.tipo WHEN '01' THEN 'Factura' ELSE 'Boleta' END AS tipo, c.serie, c.numero,
+-- Bases creadas antes de las notas de crédito
+ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS referencia_id int REFERENCES comprobantes(id);
+ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS motivo_nota varchar(2);
+ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS sustento varchar(250);
+-- Comprobante neutralizado por una nota de crédito total (sigue válido en SUNAT; la nota lo resta en el registro de ventas)
+ALTER TABLE comprobantes ADD COLUMN IF NOT EXISTS anulado_con_nota_id int REFERENCES comprobantes(id);
+ALTER TABLE comprobantes DROP CONSTRAINT IF EXISTS comprobantes_tipo_check;
+ALTER TABLE comprobantes DROP CONSTRAINT IF EXISTS ck_comprobantes_tipo;
+ALTER TABLE comprobantes ADD CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('01','03','07'));
+ALTER TABLE comprobantes DROP CONSTRAINT IF EXISTS ck_nota_referencia;
+ALTER TABLE comprobantes ADD CONSTRAINT ck_nota_referencia CHECK ((tipo = '07') = (referencia_id IS NOT NULL AND motivo_nota IS NOT NULL));
+ALTER TABLE series_comprobante DROP CONSTRAINT IF EXISTS series_comprobante_tipo_check;
+ALTER TABLE series_comprobante DROP CONSTRAINT IF EXISTS ck_series_tipo;
+ALTER TABLE series_comprobante ADD CONSTRAINT ck_series_tipo CHECK (tipo IN ('01','03','07'));
+
+CREATE INDEX IF NOT EXISTS ix_comprobantes_reserva    ON comprobantes (reserva_id);
+CREATE INDEX IF NOT EXISTS ix_comprobantes_fecha      ON comprobantes (fecha_emision);
+CREATE INDEX IF NOT EXISTS ix_comprobantes_referencia ON comprobantes (referencia_id);
+-- Una reserva tiene como máximo una boleta o factura vigente (no cuentan notas de crédito, rechazados, anulados ni los neutralizados por nota de crédito)
+DROP INDEX IF EXISTS ux_comprobante_vigente;
+CREATE UNIQUE INDEX ux_comprobante_vigente ON comprobantes (reserva_id)
+  WHERE estado NOT IN ('Rechazado','Anulado') AND tipo <> '07' AND anulado_con_nota_id IS NULL;
+
+-- Registro de ventas para Power BI (las notas de crédito restan en total_neto)
+DROP VIEW IF EXISTS vw_comprobantes_powerbi;
+CREATE VIEW vw_comprobantes_powerbi AS
+SELECT c.id AS comprobante_id, CASE c.tipo WHEN '01' THEN 'Factura' WHEN '03' THEN 'Boleta' ELSE 'Nota de crédito' END AS tipo, c.serie, c.numero,
        c.serie || '-' || c.numero AS comprobante, c.fecha_emision, c.tipo_operacion, c.cliente_tipo_doc, c.cliente_num_doc,
-       c.cliente_nombre, c.gravada, c.exportacion, c.igv, c.total, c.estado, c.proveedor, r.codigo AS codigo_reserva
-FROM comprobantes c JOIN reservas r ON r.id = c.reserva_id;
+       c.cliente_nombre, c.gravada, c.exportacion, c.igv, c.total, c.estado, c.proveedor, r.codigo AS codigo_reserva,
+       ref.serie || '-' || ref.numero AS modifica, c.motivo_nota,
+       CASE WHEN c.tipo = '07' THEN -c.total ELSE c.total END AS total_neto
+FROM comprobantes c JOIN reservas r ON r.id = c.reserva_id LEFT JOIN comprobantes ref ON ref.id = c.referencia_id;
+
+-- ---------------------------------------------------------------------
+-- 6. Devoluciones de dinero (por la pasarela o registradas a mano)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS devoluciones (
+  id                  int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  pago_id             int           NOT NULL REFERENCES pagos(id),
+  reserva_id          int           NOT NULL REFERENCES reservas(id),
+  monto               numeric(10,2) NOT NULL CHECK (monto > 0),                 -- soles
+  motivo              varchar(200)  NOT NULL,
+  reduce_total        boolean       NOT NULL DEFAULT false,                    -- descuento o noches no usadas
+  medio               varchar(10)   NOT NULL CHECK (medio IN ('Pasarela','Manual')),
+  pasarela            varchar(20),
+  estado              varchar(10)   NOT NULL DEFAULT 'Pendiente' CHECK (estado IN ('Pendiente','Completada','Fallida')),
+  referencia_externa  varchar(100),
+  respuesta           jsonb,
+  mensaje             varchar(300),
+  registrado_por      varchar(100)  NOT NULL,
+  fecha               timestamptz   NOT NULL DEFAULT now(),
+  fecha_resultado     timestamptz
+);
+CREATE INDEX IF NOT EXISTS ix_devoluciones_pago    ON devoluciones (pago_id);
+CREATE INDEX IF NOT EXISTS ix_devoluciones_reserva ON devoluciones (reserva_id);
+
+-- Lo pagado de una reserva en un solo lugar: pagos aprobados menos devoluciones completadas
+CREATE OR REPLACE FUNCTION pagado_neto(p_reserva int) RETURNS numeric LANGUAGE sql STABLE AS $$
+  SELECT coalesce((SELECT sum(monto_soles) FROM pagos WHERE reserva_id = p_reserva AND estado = 'Aprobado'), 0)
+       - coalesce((SELECT sum(monto) FROM devoluciones WHERE reserva_id = p_reserva AND estado = 'Completada'), 0)
+$$;
+
+CREATE OR REPLACE VIEW vw_reservas_powerbi AS
+SELECT r.id AS reserva_id, r.codigo, r.fecha_reserva, r.fecha_reserva::date AS fecha_reserva_dia,
+       r.fecha_entrada, r.fecha_salida, r.noches, r.huespedes,
+       r.fecha_entrada - r.fecha_reserva::date AS dias_anticipacion,
+       r.estado AS estado_reserva, (r.estado NOT IN ('Cancelada','NoShow'))::int AS es_efectiva,
+       r.canal, CASE c.residencia WHEN 'EXT' THEN 'Extranjero' ELSE 'Residente' END AS residencia,
+       r.exonerado_igv, r.subtotal, r.igv, r.total, round(r.total / nullif(r.noches, 0), 2) AS tarifa_promedio_noche,
+       pagado_neto(r.id) AS pagado, r.total - pagado_neto(r.id) AS saldo,
+       c.id AS cliente_id, c.nombres || ' ' || c.apellidos AS cliente, c.tipo_documento, c.codigo_pais,
+       h.numero AS habitacion, h.piso, t.nombre AS tipo_habitacion, t.precio_noche AS tarifa_lista
+FROM reservas r
+JOIN clientes c ON c.id = r.cliente_id
+JOIN habitaciones h ON h.id = r.habitacion_id
+JOIN tipos_habitacion t ON t.id = h.tipo_habitacion_id;
+
+-- ---------------------------------------------------------------------
+-- 7. Correos programados: recordatorio antes de la llegada y encuesta tras el check-out
+-- ---------------------------------------------------------------------
+-- Como máximo un recordatorio y una encuesta por reserva, aunque el proceso corra en varias instancias
+CREATE UNIQUE INDEX IF NOT EXISTS ux_correos_programados ON correos (reserva_id, tipo) WHERE tipo IN ('recordatorio','encuesta');
+
+CREATE TABLE IF NOT EXISTS encuestas (
+  id               int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  reserva_id       int           NOT NULL UNIQUE REFERENCES reservas(id),
+  token            uuid          NOT NULL UNIQUE DEFAULT gen_random_uuid(),   -- enlace del correo, imposible de adivinar
+  fecha_envio      timestamptz   NOT NULL DEFAULT now(),
+  calificacion     int           CHECK (calificacion BETWEEN 1 AND 5),
+  recomendacion    int           CHECK (recomendacion BETWEEN 0 AND 10),     -- base del NPS
+  comentario       varchar(1000),
+  fecha_respuesta  timestamptz,
+  CHECK ((fecha_respuesta IS NULL) = (calificacion IS NULL))
+);

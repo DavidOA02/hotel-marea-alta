@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { redondear } from '@marea/shared';
+import { desglosar, redondear } from '@marea/shared';
 import type { PoolClient } from 'pg';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
@@ -26,8 +26,22 @@ export class PagosService {
       WHERE ${col} = $1 FOR UPDATE OF r`, [val], c);
     if (!r) throw falla(404, 'Reserva no encontrada.');
     // Consulta aparte (después de obtener el bloqueo) para ver los pagos que otra transacción acaba de confirmar
-    const { pagado } = (await this.db.uno<{ pagado: number }>(`SELECT coalesce(sum(monto_soles), 0) AS pagado FROM pagos WHERE reserva_id = $1 AND estado = 'Aprobado'`, [r.id], c))!;
+    const { pagado } = (await this.db.uno<{ pagado: number }>('SELECT pagado_neto($1) AS pagado', [r.id], c))!;
     return { ...r, pagado, saldo: redondear(r.total - pagado) };
+  }
+
+  /**
+   * Sube o baja el total de una reserva (descuento, noches no usadas, nota de crédito parcial) y recalcula
+   * valor de venta e IGV. Es el único lugar que cambia el importe de una reserva ya creada fuera del cambio de habitación.
+   */
+  async ajustarTotal(c: PoolClient, reservaId: number, delta: number) {
+    const r = (await this.db.uno<{ codigo: string; total: number; noches: number; exoneradoIgv: boolean }>(
+      'SELECT codigo, total, noches, exonerado_igv FROM reservas WHERE id = $1 FOR UPDATE', [reservaId], c))!;
+    const nuevo = redondear(r.total + delta);
+    if (nuevo < 0) throw falla(409, `El descuento (S/ ${(-delta).toFixed(2)}) supera el total de la reserva (S/ ${r.total.toFixed(2)}).`, 'monto');
+    const q = desglosar(nuevo, r.noches, r.exoneradoIgv);
+    await c.query('UPDATE reservas SET subtotal = $2, igv = $3, total = $4 WHERE id = $1', [reservaId, q.subtotal, q.igv, q.total]);
+    return { codigo: r.codigo, anterior: r.total, total: q.total };
   }
 
   /** Inserta el pago y lo deja en la bitácora. Se llama dentro de la transacción que bloqueó la reserva. */

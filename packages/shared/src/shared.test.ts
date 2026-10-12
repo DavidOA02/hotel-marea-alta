@@ -1,6 +1,6 @@
 import { cotizar, redondear, validarDocumento, validarTelefono, sumarDiasHabiles, diasEntre, enRango, sumarEstadias, horasParaLlegada,
   reservaWebSchema, reservaPanelSchema, pagoSchema, usuarioSchema, cambiarClaveSchema, reclamacionSchema, primerError, hoyLima, sumarDias,
-  recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema } from './index';
+  recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema, notaCreditoSchema, devolucionSchema, encuestaSchema } from './index';
 
 describe('Tarifas e IGV', () => {
   it('incluye IGV para residentes', () => {
@@ -122,6 +122,18 @@ describe('Esquemas Zod', () => {
   it('pago en línea: código MA + 7 dígitos y correo', () => {
     expect(pagoEnLineaSchema.parse({ codigo: ' ma2600042 ', email: 'A@B.PE' })).toEqual({ codigo: 'MA2600042', email: 'a@b.pe' });
     expect(pagoEnLineaSchema.safeParse({ codigo: '123', email: 'a@b.pe' }).success).toBe(false);
+  });
+  it('nota de crédito: el monto solo es obligatorio en la disminución en el valor', () => {
+    expect(notaCreditoSchema.safeParse({ motivo: '01', sustento: 'Error en los datos' }).success).toBe(true);
+    const r = notaCreditoSchema.safeParse({ motivo: '09', monto: '', sustento: 'Descuento por reclamo' });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(primerError(r.error).campo).toBe('monto');
+    expect(notaCreditoSchema.parse({ motivo: '09', monto: '120.50', sustento: 'Descuento por reclamo' }).monto).toBe(120.5);
+  });
+  it('devolución y encuesta', () => {
+    expect(devolucionSchema.parse({ monto: '50', motivo: 'Saldo a favor' })).toEqual({ monto: 50, motivo: 'Saldo a favor', reducirTotal: false });
+    expect(encuestaSchema.safeParse({ calificacion: 6, recomendacion: 9 }).success).toBe(false);
+    expect(encuestaSchema.parse({ calificacion: '5', recomendacion: '10', comentario: '' })).toEqual({ calificacion: 5, recomendacion: 10, comentario: null });
   });
   it('libro de reclamaciones: apoderado si es menor', () => {
     const r = { tipo: 'Reclamo', nombreCompleto: 'X', tipoDocumento: 'DNI', numeroDocumento: '12345678', domicilio: 'Lima', telefono: '9', email: 'x@y.pe',

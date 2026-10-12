@@ -1,17 +1,20 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
-import { anularPagoSchema, hoyLima, redondear, sumarDias } from '@marea/shared';
+import { anularPagoSchema, devolucionSchema, hoyLima, redondear, sumarDias } from '@marea/shared';
+import { z } from 'zod';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
 import { ZodPipe } from '../comun/zod.pipe';
 import { UsuarioSesion } from '../auth/auth.service';
 import { Roles, SesionGuard, Usuario } from '../auth/guards';
 import { Bitacora } from '../auditoria/bitacora.service';
+import { SQL_VIGENTE } from '../facturacion/consultas';
+import { Devoluciones } from '../pagos/devoluciones.service';
 
-/** Caja: pagos por rango y anulación (solo administrador). Fechas en hora de Lima. */
+/** Caja: pagos y devoluciones por rango; anulación y devolución (solo administrador). Fechas en hora de Lima. */
 @Controller('gestion/pagos')
 @UseGuards(SesionGuard)
 export class PagosController {
-  constructor(private readonly db: Db, private readonly bitacora: Bitacora) {}
+  constructor(private readonly db: Db, private readonly bitacora: Bitacora, private readonly devoluciones: Devoluciones) {}
 
   @Get()
   async listar(@Query('desde') desde?: string, @Query('hasta') hasta?: string, @Query('metodo') metodo?: string) {
@@ -32,18 +35,28 @@ export class PagosController {
       a[x.metodo].monto = redondear(a[x.metodo].monto + x.montoSoles); a[x.metodo].cantidad++;
       return a;
     }, {})).sort((a: any, b: any) => b.monto - a.monto);
-    return { desde: d, hasta: h, total: redondear(aprob.reduce((s, x) => s + x.montoSoles, 0)), cantidad: aprob.length, porMetodo, pagos };
+    // Devoluciones del periodo (por fecha en que se completaron o se pidieron)
+    const devoluciones = await this.db.query<any>(`SELECT dv.id, dv.pago_id, r.codigo AS codigo_reserva, c.nombres || ' ' || c.apellidos AS cliente, dv.monto, dv.motivo, dv.medio,
+      dv.pasarela, dv.estado, dv.mensaje, dv.reduce_total, dv.registrado_por, dv.fecha, dv.fecha_resultado, p.metodo
+      FROM devoluciones dv JOIN pagos p ON p.id = dv.pago_id JOIN reservas r ON r.id = dv.reserva_id JOIN clientes c ON c.id = r.cliente_id
+      WHERE (coalesce(dv.fecha_resultado, dv.fecha) AT TIME ZONE 'America/Lima') >= $1::date AND (coalesce(dv.fecha_resultado, dv.fecha) AT TIME ZONE 'America/Lima') < $2::date
+      ORDER BY coalesce(dv.fecha_resultado, dv.fecha) DESC`, [d, sumarDias(h, 1)]);
+    const total = redondear(aprob.reduce((s, x) => s + x.montoSoles, 0));
+    const devuelto = redondear(devoluciones.filter(x => x.estado === 'Completada').reduce((s, x) => s + x.monto, 0));
+    return { desde: d, hasta: h, total, devuelto, neto: redondear(total - devuelto), cantidad: aprob.length, porMetodo, pagos, devoluciones };
   }
 
   @Post(':id/anular') @HttpCode(200) @Roles('Administrador')
   anular(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(anularPagoSchema)) d: { motivo: string }) {
     return this.db.transaccion(async c => {
       const p = await this.db.uno<any>(`SELECT p.estado, p.monto_soles, p.metodo, p.pasarela, r.codigo, r.estado AS estado_reserva,
-        EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND k.estado IN ('Aceptado','Observado','Pendiente')) AS con_comprobante
+        EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND ${SQL_VIGENTE}) AS con_comprobante,
+        EXISTS (SELECT 1 FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida') AS con_devoluciones
         FROM pagos p JOIN reservas r ON r.id = p.reserva_id WHERE p.id = $1 FOR UPDATE OF p`, [id], c);
       if (!p) throw falla(404, 'Pago no encontrado.');
       if (p.estado === 'Anulado') throw falla(409, 'El pago ya está anulado.');
       if (p.estadoReserva === 'CheckOut') throw falla(409, 'No se anulan pagos de estadías cerradas (check-out).');
+      if (p.conDevoluciones) throw falla(409, 'El pago tiene devoluciones registradas: no se puede anular.');
       await c.query(`UPDATE pagos SET estado = 'Anulado', motivo_anulacion = $2 WHERE id = $1`, [id, `${d.motivo} — ${u.nombre}`]);
       await this.bitacora.registrar({ accion: 'pago.anular', entidad: 'reserva', entidadId: p.codigo,
         descripcion: `Pago de S/ ${p.montoSoles.toFixed(2)} (${p.pasarela ? `en línea, ${p.pasarela}` : p.metodo}) anulado. Motivo: ${d.motivo}`,
@@ -52,5 +65,16 @@ export class PagosController {
         p.conComprobante ? 'La reserva tiene un comprobante electrónico: evalúa anularlo o emitir una nota de crédito.' : null].filter(Boolean);
       return { id, mensaje: 'Pago anulado.', advertencia: avisos.length ? avisos.join(' ') : null };
     });
+  }
+
+  /** Devuelve dinero de un pago: por la pasarela (Culqi, Mercado Pago) o registrando la devolución hecha en efectivo, transferencia o en el portal de Niubiz. */
+  @Post(':id/devolver') @HttpCode(200) @Roles('Administrador')
+  devolver(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(devolucionSchema)) d: z.output<typeof devolucionSchema>) {
+    return this.devoluciones.devolver(id, d, u.nombre);
+  }
+
+  @Post('devoluciones/:id/reintentar') @HttpCode(200) @Roles('Administrador')
+  reintentarDevolucion(@Param('id', ParseIntPipe) id: number) {
+    return this.devoluciones.reintentar(id);
   }
 }
