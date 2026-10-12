@@ -1,5 +1,6 @@
 'use client';
 import { BedSingle, Check, CupSoda, Footprints, Home, LogIn, LogOut, Moon, Phone, Sparkles, Wallet } from 'lucide-react';
+import { ETIQUETAS } from '@marea/shared';
 import { fechaDia, soles, soles0 } from '@/lib/formato';
 import { apiPanel, refrescar } from '@/stores/sesion';
 import { avisar } from '@/stores/avisos';
@@ -45,7 +46,8 @@ export default function Recepcion() {
         <Columna t="Limpieza pendiente" icono={Sparkles} n={d.limpieza.length}>{d.limpieza.map((h: any) => (
           <li key={h.id} className="flex items-center gap-3 border-b border-[#EFEDE7] px-4 py-3 last:border-0">
             <span className="grid h-11 min-w-13 place-items-center rounded-lg bg-ocean px-2 font-semibold text-white">{h.numero}</span>
-            <div className="flex-1"><p className="font-medium">{h.tipo}</p><p className="text-sm text-muted">Marcada como sucia</p></div>
+            <div className="flex-1"><p className="font-medium">{h.tipo}</p><p className="text-sm text-muted">{h.estadoLimpieza === 'EnLimpieza' ? 'En limpieza' : h.tareaTipo ? ETIQUETAS[h.tareaTipo] : 'Por limpiar'}{h.asignadaA ? ` · ${h.asignadaA}` : ''}</p>
+              {h.llegaHoy && <p className="text-xs font-medium text-bad">Llega un huésped hoy</p>}</div>
             <BotonP variante="claro" className="!min-h-9 !px-3" onClick={async () => { try { await apiPanel(`/gestion/habitaciones/${h.id}/limpieza`, { method: 'PATCH', body: { estadoLimpieza: 'Limpia' } }); avisar('Habitación lista para el siguiente huésped.'); refrescar(); } catch (e: any) { avisar(e.message, 'error'); } }}><Check className="size-4" />Limpia</BotonP>
           </li>))}</Columna>
       </div>

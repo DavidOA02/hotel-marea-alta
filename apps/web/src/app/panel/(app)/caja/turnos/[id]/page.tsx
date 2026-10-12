@@ -10,7 +10,7 @@ import { Tabla, columnas } from '@/components/panel/tabla';
 import { Campo } from '@/components/panel/campo';
 import { err, FormularioModal } from '@/components/panel/formularios';
 import { useFicha } from '@/components/panel/reservas';
-import { CobrosPorMetodo, DesgloseEfectivo, Diferencia, estadoTurno, FormArqueo, FormMovimiento } from '@/components/panel/caja';
+import { CobrosPorMetodo, DesgloseEfectivo, Diferencia, estadoTurno, FormArqueo, FormMovimiento, MontoDevuelto } from '@/components/panel/caja';
 
 /** Reporte de un turno de caja: arqueo, desglose del efectivo, cobros, devoluciones y movimientos. Se imprime con firmas. */
 export default function ReporteTurno({ params }: { params: Promise<{ id: string }> }) {
@@ -39,7 +39,7 @@ export default function ReporteTurno({ params }: { params: Promise<{ id: string 
   const colsDev = [
     c.accessor('fecha', { header: 'Fecha', cell: i => fechaHora(i.getValue()) }), reserva, c.accessor('cliente', { header: 'Cliente' }),
     c.accessor('metodo', { header: 'Método', cell: i => <>{i.getValue()}<span className="block text-xs text-muted">{i.row.original.motivo}</span></> }),
-    c.accessor('monto', { header: 'Monto', meta: { derecha: true }, cell: i => <span className="text-bad">−{soles(i.getValue())}</span> }),
+    c.accessor('monto', { header: 'Monto', meta: { derecha: true }, cell: i => <MontoDevuelto monto={i.getValue()} montoDolares={i.row.original.montoDolares} /> }),
     c.accessor('registradoPor', { header: 'Registró' })
   ];
   const colsMov = [
@@ -57,7 +57,7 @@ export default function ReporteTurno({ params }: { params: Promise<{ id: string 
         <Link href="/panel/caja?vista=turnos" className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-line bg-white px-4 text-sm font-medium hover:bg-sand print:hidden"><ArrowLeft className="size-4" />Caja</Link>
         {abierto && <BotonP variante="claro" className="print:hidden" onClick={() => setMovimiento(true)}><ArrowLeftRight className="size-4" />Ingreso o retiro</BotonP>}
         {abierto && <BotonP className="print:hidden" onClick={() => setArqueo(true)}><Calculator className="size-4" />Cerrar turno</BotonP>}
-        {admin && !abierto && !t.fechaRevision && t.usuarioId !== usuario?.id && <BotonP variante="ok" className="print:hidden" onClick={() => setRevisar(true)}><ClipboardCheck className="size-4" />Marcar como revisado</BotonP>}
+        {admin && !abierto && !t.fechaRevision && <BotonP variante="ok" className="print:hidden" onClick={() => setRevisar(true)}><ClipboardCheck className="size-4" />Marcar como revisado</BotonP>}
         <BotonP variante="claro" className="print:hidden" onClick={() => window.print()}><Printer className="size-4" />Imprimir</BotonP>
       </Cabecera>
 

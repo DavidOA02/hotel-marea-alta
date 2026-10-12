@@ -52,7 +52,7 @@ export class MetricasController {
     return {
       hoy,
       habitaciones: { operativas, ocupadas, libres: Math.max(0, operativas - ocupadas), mantenimiento: habs.filter(h => h.estado !== 'Operativa').length,
-        sucias: habs.filter(h => h.estado === 'Operativa' && h.estadoLimpieza === 'Sucia').length },
+        sucias: habs.filter(h => h.estado === 'Operativa' && h.estadoLimpieza !== 'Limpia').length },
       ocupacionHoy: dividir(ocupadas, operativas),
       llegadasHoy: await n(`SELECT count(*) AS n FROM reservas WHERE estado = 'Confirmada' AND fecha_entrada <= $1 AND fecha_salida > $1`, [hoy]),
       salidasHoy: await n(`SELECT count(*) AS n FROM reservas WHERE estado = 'CheckIn' AND fecha_salida <= $1`, [hoy]),

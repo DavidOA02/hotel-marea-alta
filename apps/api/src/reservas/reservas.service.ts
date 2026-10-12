@@ -8,6 +8,8 @@ import { Correos } from '../correo/correos.service';
 import { cancelacionReserva, confirmacionReserva, soles } from '../correo/plantillas';
 import { pasarelaActiva } from '../config/env';
 import { SQL_VIGENTE } from '../facturacion/consultas';
+import { Limpieza } from '../operacion/limpieza.service';
+import { SQL_OCUPA, sqlBloqueo } from './consultas';
 
 export interface DatosCliente {
   nombres: string; apellidos: string; tipoDocumento: string; numeroDocumento: string;
@@ -20,15 +22,13 @@ export interface Solicitud {
 }
 export interface CambioHabitacion { habitacionId: number; tarifa: 'Mantener' | 'Recalcular'; motivo: string }
 
-/** Rango que ocupa una reserva en su habitación actual (si cambió de habitación, desde el día del cambio). */
-const SQL_OCUPA = `daterange(coalesce(r.habitacion_desde, r.fecha_entrada), r.fecha_salida)`;
-
-/** Disponibilidad: habitaciones operativas sin reservas activas que se crucen con el rango. */
+/** Disponibilidad: habitaciones operativas sin reservas activas ni bloqueos de mantenimiento que se crucen con el rango. */
 export const SQL_LIBRES = `
   SELECT h.id, h.numero FROM habitaciones h
   WHERE h.tipo_habitacion_id = $1 AND h.estado = 'Operativa'
     AND NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.estado IN ('Confirmada','CheckIn')
-                    AND ${SQL_OCUPA} && daterange($2::date, $3::date))`;
+                    AND ${SQL_OCUPA} && daterange($2::date, $3::date))
+    AND NOT EXISTS (${sqlBloqueo('h.id', '$2', '$3')})`;
 
 /** Proyección única de reserva (lista y detalle). Pagado = pagos aprobados − devoluciones completadas (función pagado_neto). */
 export const SQL_RESERVA = `
@@ -50,7 +50,7 @@ export const dmy = (iso: string) => iso.split('-').reverse().join('/');
 @Injectable()
 export class ReservasService {
   private readonly log = new Logger('Reservas');
-  constructor(private readonly db: Db, private readonly bitacora: Bitacora, private readonly correos: Correos) {}
+  constructor(private readonly db: Db, private readonly bitacora: Bitacora, private readonly correos: Correos, private readonly limpieza: Limpieza) {}
 
   async crear(s: Solicitud) {
     const tipo = await this.db.uno<{ id: number; nombre: string; capacidad: number; precioNoche: number }>(
@@ -219,6 +219,7 @@ export class ReservasService {
       WHERE h.estado = 'Operativa' AND h.id <> $1 AND t.capacidad >= $2
         AND NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.id <> $3 AND r.estado IN ('Confirmada','CheckIn')
                         AND ${SQL_OCUPA} && daterange($4::date, $5::date))
+        AND NOT EXISTS (${sqlBloqueo('h.id', '$4', '$5')})
       ORDER BY (h.tipo_habitacion_id = $6) DESC, t.precio_noche, h.piso, h.numero`,
       [r.habitacionId, r.huespedes, r.id, r.desde, r.fechaSalida, r.tipoId]);
     return {
@@ -242,6 +243,8 @@ export class ReservasService {
       const choque = await this.db.uno<{ codigo: string }>(`SELECT r.codigo FROM reservas r WHERE r.habitacion_id = $1 AND r.id <> $2
         AND r.estado IN ('Confirmada','CheckIn') AND ${SQL_OCUPA} && daterange($3::date, $4::date) LIMIT 1`, [nueva.id, r.id, r.desde, r.fechaSalida], c);
       if (choque) throw falla(409, `La habitación ${nueva.numero} no está libre del ${dmy(r.desde)} al ${dmy(r.fechaSalida)}.`, 'habitacionId');
+      if (await this.db.uno(sqlBloqueo('$1', '$2', '$3'), [nueva.id, r.desde, r.fechaSalida], c))
+        throw falla(409, `La habitación ${nueva.numero} está bloqueada por mantenimiento en esas fechas.`, 'habitacionId');
 
       let importe = { subtotal: r.subtotal, igv: r.igv, total: r.total };
       if (d.tarifa === 'Recalcular') {
@@ -253,7 +256,7 @@ export class ReservasService {
         [r.id, nueva.id, r.desde > r.fechaEntrada ? r.desde : null, importe.subtotal, importe.igv, importe.total]);
       await c.query(`INSERT INTO cambios_habitacion (reserva_id, habitacion_anterior_id, habitacion_nueva_id, desde, tarifa, total_anterior, total_nuevo, motivo, registrado_por)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [r.id, r.habitacionId, nueva.id, r.desde, d.tarifa, r.total, importe.total, d.motivo, registradoPor]);
-      if (r.estado === 'CheckIn') await c.query(`UPDATE habitaciones SET estado_limpieza = 'Sucia' WHERE id = $1`, [r.habitacionId]);
+      if (r.estado === 'CheckIn') await this.limpieza.programar(c, r.habitacionId, 'Salida', r.id, registradoPor);
 
       const tarifa = d.tarifa === 'Recalcular' ? `tarifa recalculada ${soles(r.total)} → ${soles(importe.total)}` : 'misma tarifa';
       await this.bitacora.registrar({ accion: 'reserva.cambiar_habitacion', entidad: 'reserva', entidadId: r.codigo,

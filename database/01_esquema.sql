@@ -11,8 +11,8 @@ SET client_encoding = 'UTF8';
 SET client_min_messages = warning;
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- para impedir reservas cruzadas
 
-DROP VIEW  IF EXISTS vw_turnos_caja_powerbi, vw_comprobantes_powerbi, vw_reclamaciones_powerbi, vw_pagos_powerbi, vw_ocupacion_diaria, vw_reservas_powerbi CASCADE;
-DROP TABLE IF EXISTS bitacora, correos, encuestas, consumos, devoluciones, movimientos_caja, turnos_caja, cambios_habitacion, ordenes_pago, comprobantes, series_comprobante CASCADE;   -- de 03_mejoras.sql
+DROP VIEW  IF EXISTS vw_mantenimiento_powerbi, vw_turnos_caja_powerbi, vw_comprobantes_powerbi, vw_reclamaciones_powerbi, vw_pagos_powerbi, vw_ocupacion_diaria, vw_reservas_powerbi CASCADE;
+DROP TABLE IF EXISTS bitacora, correos, encuestas, consumos, devoluciones, movimientos_caja, turnos_caja, mantenimientos, limpiezas, cambios_habitacion, ordenes_pago, comprobantes, series_comprobante CASCADE;   -- de 03_mejoras.sql
 DROP TABLE IF EXISTS pagos, reservas, habitaciones, tipos_habitacion, clientes, reclamaciones, suscriptores, usuarios, calendario CASCADE;
 
 -- ---------------------------------------------------------------------

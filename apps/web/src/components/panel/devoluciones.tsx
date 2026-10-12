@@ -3,9 +3,9 @@ import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { CornerDownRight, RotateCcw, Undo2 } from 'lucide-react';
-import { devolucionSchema, ETIQUETAS, redondear, type DevolucionInput } from '@marea/shared';
+import { devolucionSchema, dolaresADevolver, ETIQUETAS, redondear, type DevolucionInput } from '@marea/shared';
 import { ApiError } from '@/lib/api';
-import { fechaHora, soles } from '@/lib/formato';
+import { dolares, fechaHora, soles } from '@/lib/formato';
 import { apiPanel, refrescar, useSesion } from '@/stores/sesion';
 import { avisar } from '@/stores/avisos';
 import { BotonP, Estado, Modal } from './base';
@@ -43,7 +43,7 @@ export function SeccionPagos({ r, pagos, devoluciones, comprobantes, alCambiar }
           {devoluciones.filter(x => x.pagoId === p.id).map(x => (
             <div key={x.id} className="mt-1 flex items-start justify-between gap-3 pl-4 text-xs text-muted">
               <span className="flex gap-1"><CornerDownRight className="size-3.5 shrink-0" aria-hidden />Devolución {x.medio === 'Pasarela' ? `por ${ETIQUETAS[x.pasarela] ?? x.pasarela}` : 'registrada'} · {fechaHora(x.fechaResultado ?? x.fecha)} · {x.motivo}{x.reduceTotal ? ' · descuento' : ''}{x.mensaje && x.estado !== 'Completada' ? ` · ${x.mensaje}` : ''}</span>
-              <span className="flex shrink-0 items-center gap-2 tabular-nums text-ink">−{soles(x.monto)}
+              <span className="flex shrink-0 items-center gap-2 tabular-nums text-ink">−{soles(x.monto)}{x.montoDolares != null ? ` (${dolares(x.montoDolares)})` : ''}
                 {admin && x.estado === 'Pendiente' && x.medio === 'Pasarela' && (x.pasarela==='Niubiz' && x.solicitudEnviada && !x.referenciaExterna
                   ? <button className="text-xs text-ocean underline" onClick={()=>{setConciliar(x);setCodigo('');setError(null);}}>Conciliar</button>
                   : <button onClick={() => reintentar(x.id)} title={x.pasarela==='Niubiz' && x.referenciaExterna?'Consultar devolución':'Reintentar con la pasarela'} aria-label={x.pasarela==='Niubiz' && x.referenciaExterna?'Consultar devolución':'Reintentar devolución'} className="grid size-6 place-items-center rounded hover:bg-sand"><RotateCcw className="size-3.5" /></button>)}
@@ -82,6 +82,9 @@ export function FormularioDevolucion({ pago: p, r, comprobante, abierto, alCerra
     : `Registra la devolución que ya entregaste al huésped (${p.metodo.toLowerCase()}, transferencia, Yape…).`;
   const activa = !['Cancelada', 'NoShow'].includes(r.estado);
   const nuevoTotal = redondear(r.total - monto), nuevoSaldo = redondear((reducir ? nuevoTotal : r.total) - (r.pagado - monto));
+  // Lo cobrado en dólares se devuelve en dólares, al tipo de cambio del pago
+  const enDolares = !automatica && p.moneda === 'USD';
+  const usd = enDolares && monto > 0 ? dolaresADevolver(monto, { disponible: p.disponibleDevolucion, disponibleDolares: p.disponibleDolares, tipoCambio: p.tipoCambio }) : 0;
   return (
     <Modal abierto={abierto} alCerrar={alCerrar} titulo="Devolver dinero"
       pie={<><BotonP variante="claro" onClick={alCerrar}>Cancelar</BotonP><BotonP variante="peligro" disabled={isSubmitting} onClick={enviar}><Undo2 className="size-4" />{isSubmitting ? 'Procesando…' : automatica ? 'Devolver' : 'Registrar devolución'}</BotonP></>}>
@@ -90,8 +93,9 @@ export function FormularioDevolucion({ pago: p, r, comprobante, abierto, alCerra
         <p className="text-sm text-muted">Pago del {fechaHora(p.fechaPago)} por {soles(p.montoSoles)} · disponible para devolver: <strong className="text-ink">{soles(p.disponibleDevolucion)}</strong></p>
         <p className="rounded-lg bg-sand p-3 text-sm">{medio}</p>
         {efectivo && cargado && (turno
-          ? <p className="text-sm text-muted">El efectivo sale de tu turno de caja N.° {turno.id}: debería haber {soles(turno.resumen.esperado.soles)}.</p>
+          ? <p className="text-sm text-muted">El efectivo sale de tu turno de caja N.° {turno.id}: debería haber {enDolares ? dolares(turno.resumen.esperado.dolares) : soles(turno.resumen.esperado.soles)}.</p>
           : <AvisoTurno texto="Para entregar una devolución en efectivo abre tu turno de caja." />)}
+        {enDolares && usd > 0 && <p className="rounded-lg bg-gold-soft p-3 text-sm">El pago fue en dólares: entrega <strong>{dolares(usd)}</strong> (tipo de cambio del pago: {p.tipoCambio}).</p>}
         <div className="grid gap-4 sm:grid-cols-3">
           <Campo etiqueta="Monto (S/)" error={errors.monto?.message as string}><input type="number" step="0.01" min="0.01" max={p.disponibleDevolucion} {...register('monto')} /></Campo>
           <Campo etiqueta="Motivo" className="sm:col-span-2" error={errors.motivo?.message as string}><input maxLength={200} placeholder="p. ej. cancelación, noche no usada, cobro duplicado" {...register('motivo')} /></Campo>

@@ -105,6 +105,26 @@ BEGIN
       nota_revision = CASE WHEN k = 5 THEN 'Revisado con recepción; se repone del fondo de imprevistos.' END
     WHERE id = rid;
   END LOOP;
+
+  -- Limpieza del día: las habitaciones desocupadas hoy tienen su limpieza de salida (una ya en curso)
+  INSERT INTO limpiezas (habitacion_id, tipo, fecha, creada_por, reserva_id)
+  SELECT h.id, 'Salida', hoy, 'Recepción', (SELECT r.id FROM reservas r WHERE r.habitacion_id = h.id AND r.estado = 'CheckOut' AND r.fecha_salida = hoy LIMIT 1)
+  FROM habitaciones h WHERE h.estado_limpieza = 'Sucia';
+  UPDATE limpiezas SET estado = 'EnCurso', inicio = now() - interval '20 minutes', asignada_a = 'Rosa Quispe' WHERE id = (SELECT min(id) FROM limpiezas WHERE estado = 'Pendiente');
+  UPDATE habitaciones SET estado_limpieza = 'EnLimpieza' WHERE id IN (SELECT habitacion_id FROM limpiezas WHERE estado = 'EnCurso');
+  UPDATE limpiezas SET asignada_a = 'Julia Mamani' WHERE id = (SELECT max(id) FROM limpiezas WHERE estado = 'Pendiente');
+
+  -- Mantenimiento: una habitación libre bloqueada dos noches por el aire acondicionado, la piscina y una reparación de la semana pasada
+  INSERT INTO mantenimientos (habitacion_id, categoria, descripcion, prioridad, estado, bloquea, bloqueo_desde, bloqueo_hasta, asignado_a, reportado_por, fecha_inicio)
+  SELECT h.id, 'AireAcondicionado', 'El aire acondicionado no enfría y hace ruido.', 'Urgente', 'EnProceso', true, hoy, hoy + 2, 'Frío Sur SAC', 'Recepción', now() - interval '2 hours'
+  FROM habitaciones h
+  WHERE NOT EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.estado IN ('Confirmada','CheckIn') AND daterange(r.fecha_entrada, r.fecha_salida) && daterange(hoy, hoy + 2))
+  ORDER BY h.piso DESC, h.numero LIMIT 1;
+  INSERT INTO mantenimientos (area, categoria, descripcion, prioridad, reportado_por) VALUES ('Piscina', 'Gasfiteria', 'La bomba del filtro gotea.', 'Media', 'Administrador');
+  INSERT INTO mantenimientos (habitacion_id, categoria, descripcion, prioridad, estado, reportado_por, fecha_reporte, fecha_inicio, fecha_cierre, cerrado_por, solucion, costo)
+  SELECT id, 'Electricidad', 'El foco del baño parpadea.', 'Baja', 'Resuelto', 'Recepción', now() - interval '6 days', now() - interval '6 days', now() - interval '5 days',
+         'Administrador', 'Se cambió el foco y el interruptor.', 35
+  FROM habitaciones WHERE numero = '102';
 END $$;
 
 SELECT estado_reserva, count(*) AS reservas, sum(total) AS total FROM vw_reservas_powerbi GROUP BY estado_reserva ORDER BY reservas DESC;

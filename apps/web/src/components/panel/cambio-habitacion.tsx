@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ArrowLeftRight } from 'lucide-react';
-import { cambioHabitacionSchema, type CambioHabitacionInput } from '@marea/shared';
+import { cambioHabitacionSchema, ETIQUETAS, type CambioHabitacionInput } from '@marea/shared';
 import { ApiError } from '@/lib/api';
 import { fechaDia, soles, soles0 } from '@/lib/formato';
 import { apiPanel, refrescar } from '@/stores/sesion';
@@ -56,7 +56,7 @@ export function FormularioCambioHabitacion({ codigo, abierto, alCerrar, alCambia
               <select {...register('habitacionId')}>
                 <option value="">Elige una habitación libre</option>
                 {tipos.map(t => <optgroup key={t} label={t}>{d.opciones.filter(h => h.tipo === t).map(h =>
-                  <option key={h.id} value={h.id}>{h.numero} · piso {h.piso} · {soles0(h.precioNoche)}/noche{h.estadoLimpieza === 'Sucia' ? ' · por limpiar' : ''}</option>)}</optgroup>)}
+                  <option key={h.id} value={h.id}>{h.numero} · piso {h.piso} · {soles0(h.precioNoche)}/noche{h.estadoLimpieza !== 'Limpia' ? ` · ${ETIQUETAS[h.estadoLimpieza].toLowerCase()}` : ''}</option>)}</optgroup>)}
               </select>
             </Campo>
           ) : <p className="rounded-lg bg-warn-bg px-4 py-3 text-sm text-warn">No hay habitaciones libres para esas fechas con capacidad suficiente.</p>}

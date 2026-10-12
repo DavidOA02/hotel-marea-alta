@@ -1,11 +1,11 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { redondear } from '@marea/shared';
+import { dolaresADevolver, redondear } from '@marea/shared';
 import { Db } from '../db/db.service';
 import { falla } from '../comun/errores';
 import { facturadorActivo } from '../config/env';
 import { Bitacora } from '../auditoria/bitacora.service';
 import { Correos } from '../correo/correos.service';
-import { devolucionRealizada, soles } from '../correo/plantillas';
+import { devolucionRealizada, dolares, soles } from '../correo/plantillas';
 import { Facturacion } from '../facturacion/facturacion.service';
 import { Culqi, ErrorDevolucionNoEnviada, ErrorPasarela, MercadoPago, Niubiz, ResultadoDevolucion, Simulada } from '../pagos-en-linea/pasarelas';
 import { SQL_RESERVA } from '../reservas/reservas.service';
@@ -57,11 +57,12 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
     const registradoPor = usuario.nombre;
     const monto = redondear(d.monto);
     const { dev, nota, pago } = await this.db.transaccion(async c => {
-      const p = await this.db.uno<any>(`SELECT p.id, p.reserva_id, p.monto_soles, p.metodo, p.referencia, p.pasarela, p.estado, r.codigo
+      const p = await this.db.uno<any>(`SELECT p.id, p.reserva_id, p.monto, p.moneda, p.tipo_cambio, p.monto_soles, p.metodo, p.referencia, p.pasarela, p.estado, r.codigo
         FROM pagos p JOIN reservas r ON r.id = p.reserva_id WHERE p.id = $1 FOR UPDATE OF p`, [pagoId], c);
       if (!p) throw falla(404, 'Pago no encontrado.');
       if (p.estado !== 'Aprobado') throw falla(409, 'Solo se devuelven pagos aprobados.');
-      const { devuelto } = (await this.db.uno<{ devuelto: number }>(`SELECT coalesce(sum(monto), 0) AS devuelto FROM devoluciones WHERE pago_id = $1 AND estado <> 'Fallida'`, [pagoId], c))!;
+      const { devuelto, devueltoDolares } = (await this.db.uno<{ devuelto: number; devueltoDolares: number }>(`SELECT coalesce(sum(monto), 0) AS devuelto,
+        coalesce(sum(monto_dolares), 0) AS devuelto_dolares FROM devoluciones WHERE pago_id = $1 AND estado <> 'Fallida'`, [pagoId], c))!;
       const disponible = redondear(p.montoSoles - devuelto);
       if (monto > disponible + 0.001) throw falla(409, `Del pago solo quedan ${soles(disponible)} por devolver.`, 'monto');
 
@@ -82,19 +83,23 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
       // La devolución manual queda en el turno de caja de quien la entrega; si es en efectivo, sale de su caja.
       // El turno se bloquea después de la reserva, en el mismo orden que los cobros.
       const efectivo = !automatica && p.metodo === 'Efectivo';
+      // Lo cobrado en dólares se devuelve en dólares, al tipo de cambio del pago
+      const montoDolares = p.moneda === 'USD' && !automatica
+        ? dolaresADevolver(monto, { disponible, disponibleDolares: redondear(p.monto - devueltoDolares), tipoCambio: p.tipoCambio }) : null;
       const turno = automatica ? null : await this.turnos.delUsuario(c, usuario.id, efectivo ? 'entregar una devolución en efectivo' : null, efectivo ? 'UPDATE' : 'SHARE');
       if (efectivo) {
-        const caja = (await this.turnos.esperado(turno, c)).soles;
-        if (monto > caja + 0.001) throw falla(409, `En tu caja solo debería haber ${soles(caja)} en efectivo.`, 'monto');
+        const caja = await this.turnos.esperado(turno, c);
+        if (montoDolares !== null ? montoDolares > caja.dolares + 0.001 : monto > caja.soles + 0.001)
+          throw falla(409, `En tu caja solo debería haber ${montoDolares !== null ? dolares(caja.dolares) : soles(caja.soles)} en efectivo.`, 'monto');
       }
-      const dev = (await this.db.uno<any>(`INSERT INTO devoluciones (pago_id, reserva_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha_resultado, turno_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      const dev = (await this.db.uno<any>(`INSERT INTO devoluciones (pago_id, reserva_id, monto, motivo, reduce_total, medio, pasarela, estado, mensaje, registrado_por, fecha_resultado, turno_id, monto_dolares)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
         [p.id, p.reservaId, monto, d.motivo, d.reducirTotal, automatica ? 'Pasarela' : 'Manual', p.pasarela, automatica ? 'Pendiente' : 'Completada',
-          null, registradoPor, automatica ? null : new Date(), turno?.id ?? null], c))!;
+          null, registradoPor, automatica ? null : new Date(), turno?.id ?? null, montoDolares], c))!;
       const origen = p.pasarela ? `en línea, ${p.pasarela}` : p.metodo;
       await this.bitacora.registrar({ accion: 'pago.devolver', entidad: 'reserva', entidadId: p.codigo,
-        descripcion: `Devolución de ${soles(monto)} del pago de ${soles(p.montoSoles)} (${origen}) ${automatica ? `solicitada a ${p.pasarela}` : 'registrada'}${d.reducirTotal ? ' como descuento sobre el total' : ''}. Motivo: ${d.motivo}`.slice(0, 500),
-        datos: { devolucionId: dev.id, pagoId: p.id, monto, reducirTotal: d.reducirTotal, notaCreditoId: nota?.id ?? null } }, c);
+        descripcion: `Devolución de ${soles(monto)}${montoDolares !== null ? ` (${dolares(montoDolares)})` : ''} del pago de ${soles(p.montoSoles)} (${origen}) ${automatica ? `solicitada a ${p.pasarela}` : 'registrada'}${d.reducirTotal ? ' como descuento sobre el total' : ''}. Motivo: ${d.motivo}`.slice(0, 500),
+        datos: { devolucionId: dev.id, pagoId: p.id, monto, montoDolares, reducirTotal: d.reducirTotal, notaCreditoId: nota?.id ?? null } }, c);
       if (!automatica) await this.avisar(c, dev, p);
       return { dev, nota, pago: p };
     });
@@ -160,7 +165,7 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
   private async avisar(c: any, dev: any, p: { metodo: string; pasarela: string | null }) {
     const r = (await this.db.uno<any>(SQL_RESERVA + ' WHERE r.id = $1', [dev.reservaId], c))!;
     await this.correos.encolar({ tipo: 'devolucion', para: r.email, reservaId: r.id,
-      ...devolucionRealizada(r, { monto: dev.monto, medio: dev.medio, pasarela: p.pasarela, metodo: p.metodo, motivo: dev.motivo }) }, c);
+      ...devolucionRealizada(r, { monto: dev.monto, montoDolares: dev.montoDolares ?? null, medio: dev.medio, pasarela: p.pasarela, metodo: p.metodo, motivo: dev.motivo }) }, c);
   }
 
   async reintentar(id: number) {

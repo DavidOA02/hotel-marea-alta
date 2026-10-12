@@ -9,7 +9,7 @@ import { BotonP, Cabecera, Cargando, Estado, Kpi, useDatos } from '@/components/
 import { Tabla, columnas } from '@/components/panel/tabla';
 import { FormAnular } from '@/components/panel/formularios';
 import { useFicha } from '@/components/panel/reservas';
-import { Diferencia, estadoTurno, MiTurno } from '@/components/panel/caja';
+import { Diferencia, estadoTurno, MiTurno, MontoDevuelto } from '@/components/panel/caja';
 
 const ICONO: Record<string, React.ElementType> = { Tarjeta: CreditCard, Yape: Smartphone, Plin: Smartphone, Transferencia: Landmark, Efectivo: Banknote };
 
@@ -66,7 +66,7 @@ function Cobros({ desde, hasta }: { desde: string; hasta: string }) {
     c.accessor('codigoReserva', { header: 'Reserva', cell: i => <button className="font-mono font-semibold text-ocean underline decoration-gold" onClick={() => abrir(i.getValue())}>{i.getValue()}</button> }),
     c.accessor('cliente', { header: 'Cliente' }),
     c.accessor('medio', { header: 'Medio', cell: i => <>{i.getValue() === 'Pasarela' ? ETIQUETAS[i.row.original.pasarela] ?? i.row.original.pasarela : `Manual · ${i.row.original.metodo}`}<span className="block text-xs text-muted">{i.row.original.motivo}{i.row.original.reduceTotal ? ' · descuento' : ''}</span></> }),
-    c.accessor('monto', { header: 'Monto', meta: { derecha: true }, cell: i => <span className="text-bad">−{soles(i.getValue())}</span> }),
+    c.accessor('monto', { header: 'Monto', meta: { derecha: true }, cell: i => <MontoDevuelto monto={i.getValue()} montoDolares={i.row.original.montoDolares} /> }),
     c.accessor('estado', { header: 'Estado', cell: i => <><Estado valor={i.getValue()} />{i.row.original.estado !== 'Completada' && i.row.original.mensaje && <span className="block max-w-56 text-xs text-muted">{i.row.original.mensaje}</span>}</> })
   ];
   if (!d) return <Cargando />;
