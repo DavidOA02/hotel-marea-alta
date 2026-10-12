@@ -10,6 +10,7 @@ import { Bitacora } from '../auditoria/bitacora.service';
 import { Correos } from '../correo/correos.service';
 import type { PoolClient } from 'pg';
 import { PagosService, ReservaBloqueada } from '../pagos/pagos.service';
+import { TurnosCaja } from '../pagos/turnos.service';
 import { dmy, ReservasService, SQL_RESERVA } from '../reservas/reservas.service';
 import { SQL_COMPROBANTE } from '../facturacion/consultas';
 
@@ -18,7 +19,7 @@ import { SQL_COMPROBANTE } from '../facturacion/consultas';
 @UseGuards(SesionGuard)
 export class ReservasGestionController {
   constructor(private readonly db: Db, private readonly reservas: ReservasService, private readonly pagos: PagosService,
-              private readonly bitacora: Bitacora, private readonly correos: Correos) {}
+              private readonly bitacora: Bitacora, private readonly correos: Correos, private readonly turnos: TurnosCaja) {}
 
   @Get('reservas')
   listar(@Query('estado') estado?: string, @Query('desde') desde?: string, @Query('hasta') hasta?: string,
@@ -136,9 +137,11 @@ export class ReservasGestionController {
     return this.transicion(codigo, async (r, c) => {
       if (['Cancelada', 'NoShow'].includes(r.estado)) throw falla(409, `No se registran pagos en reservas «${r.estado}».`);
       if (montoSoles > r.saldo + 0.01) throw falla(409, `El pago (S/ ${montoSoles.toFixed(2)}) supera el saldo pendiente (S/ ${r.saldo.toFixed(2)}).`, 'monto');
+      // El efectivo entra a la caja de quien cobra: exige su turno abierto. Los demás medios quedan en el turno si lo hay.
+      const turno = await this.turnos.delUsuario(c, u.id, d.metodo === 'Efectivo' ? 'cobrar en efectivo' : null);
       const x = await this.pagos.registrar(c, r, { monto: d.monto, moneda: d.moneda, tipoCambio: d.tipoCambio ?? null, montoSoles, metodo: d.metodo,
-        referencia: d.referencia, registradoPor: u.nombre });
-      return { codigo: r.codigo, pagado: x.pagado, saldo: x.saldo, mensaje: `Pago de S/ ${montoSoles.toFixed(2)} registrado.` };
+        referencia: d.referencia, registradoPor: u.nombre, turnoId: turno?.id ?? null });
+      return { codigo: r.codigo, pagado: x.pagado, saldo: x.saldo, turnoId: turno?.id ?? null, mensaje: `Pago de S/ ${montoSoles.toFixed(2)} registrado${turno ? ` en el turno N.° ${turno.id}` : ''}.` };
     });
   }
 

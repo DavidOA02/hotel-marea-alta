@@ -36,6 +36,9 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
     http = request(app.getHttpServer());
     admin = (await http.post('/api/auth/login').send({ email: 'admin@mareaalta.pe', clave: 'Admin2026!' })).body.accessToken;
     recep = (await http.post('/api/auth/login').send({ email: 'recepcion@mareaalta.pe', clave: 'Recepcion2026!' })).body.accessToken;
+    // Los cobros y devoluciones en efectivo exigen un turno de caja abierto
+    await http.post('/api/gestion/turnos').set({ Authorization: `Bearer ${admin}` }).send({ fondoInicial: 1000 }).expect(201);
+    await http.post('/api/gestion/turnos').set({ Authorization: `Bearer ${recep}` }).send({ fondoInicial: 200 }).expect(201);
   });
   afterAll(async () => { await app.close(); });
   const A = () => ({ Authorization: `Bearer ${admin}` });
@@ -713,6 +716,123 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(tipos.every((c: any) => c.tipo === 'encuesta')).toBe(true);
       expect((await http.post('/api/gestion/correos/reintentar-fallidos').set(R()).expect(200)).body.cantidad).toBe(1);
       expect((await http.get('/api/gestion/correos/resumen').set(R())).body.fallidos).toBe(0);
+    });
+  });
+
+  describe('Caja por turnos y arqueo', () => {
+    let ana: string;
+    const N = () => ({ Authorization: `Bearer ${ana}` });
+    const reserva = async (n: number) => (await http.post('/api/gestion/reservas').set(R())
+      .send({ clienteId: 1, tipoHabitacion: 'duna', fechaEntrada: d(n), fechaSalida: d(n + 1), huespedes: 1, residencia: 'PE', canal: 'Telefono' }).expect(201)).body.codigo;
+    const cobrar = (token: Record<string, string>, codigo: string, extra: object) => http.post(`/api/gestion/reservas/${codigo}/pagos`).set(token).send({ moneda: 'PEN', ...extra });
+    const actual = async (token: Record<string, string>) => (await http.get('/api/gestion/turnos/actual').set(token).expect(200)).body;
+    let turnoAna: number, codigo: string;
+
+    beforeAll(async () => {
+      await http.post('/api/gestion/usuarios').set(A()).send({ nombre: 'Ana Caja', email: 'ana@mareaalta.pe', rol: 'Recepcionista', clave: 'Ana2026xy' }).expect(201);
+      ana = (await http.post('/api/auth/login').send({ email: 'ana@mareaalta.pe', clave: 'Ana2026xy' }).expect(200)).body.accessToken;
+    });
+
+    it('sin turno abierto no se cobra en efectivo; los demás medios se registran sin turno', async () => {
+      codigo = await reserva(300);
+      expect((await cobrar(N(), codigo, { monto: 100, metodo: 'Efectivo' }).expect(409)).body.mensaje).toBe('Abre tu turno de caja para cobrar en efectivo.');
+      expect((await cobrar(N(), codigo, { monto: 50, metodo: 'Tarjeta' }).expect(200)).body).toMatchObject({ turnoId: null, saldo: 400 });
+      expect((await actual(N())).turno).toBeNull();
+    });
+
+    it('abre el turno, cobra en soles y dólares, retira y cierra con arqueo', async () => {
+      expect((await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: -5 }).expect(400)).body.campo).toBe('fondoInicial');
+      turnoAna = (await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: 200, nota: 'Turno tarde' }).expect(201)).body.id;
+      expect((await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: 100 }).expect(409)).body.mensaje).toMatch(/Ya tienes un turno de caja abierto/);
+      await cobrar(N(), codigo, { monto: 150, metodo: 'Efectivo' }).expect(200);
+      await cobrar(N(), codigo, { monto: 50, moneda: 'USD', tipoCambio: 3.7, metodo: 'Efectivo' }).expect(200);
+      expect((await cobrar(N(), codigo, { monto: 65, metodo: 'Yape', referencia: 'OP-9' }).expect(200)).body).toMatchObject({ turnoId: turnoAna, saldo: 0 });
+      let t = (await actual(N())).turno;
+      expect(t).toMatchObject({ id: turnoAna, estado: 'Abierto', fondoInicial: 200 });
+      expect(t.resumen).toMatchObject({ esperado: { soles: 350, dolares: 50 }, cobrado: 400, pagos: 3 });
+      expect(t.resumen.porMetodo).toEqual([
+        { metodo: 'Yape', cantidad: 1, montoSoles: 65, soles: 65, dolares: 0, devuelto: 0 },
+        { metodo: 'Efectivo', cantidad: 2, montoSoles: 335, soles: 150, dolares: 50, devuelto: 0 }]);
+
+      const ruta = `/api/gestion/turnos/${turnoAna}`;
+      expect((await http.post(`${ruta}/movimientos`).set(N()).send({ tipo: 'Retiro', moneda: 'PEN', monto: 400, motivo: 'Depósito en caja fuerte' }).expect(409)).body)
+        .toEqual({ mensaje: 'En la caja solo debería haber S/ 350.00.', campo: 'monto' });
+      await http.post(`${ruta}/movimientos`).set(N()).send({ tipo: 'Retiro', moneda: 'PEN', monto: 300, motivo: 'Depósito en caja fuerte' }).expect(201);
+      await http.post(`${ruta}/movimientos`).set(A()).send({ tipo: 'Ingreso', moneda: 'PEN', monto: 20, motivo: 'Sencillo para cambio' }).expect(201);
+      await http.get(ruta).set(R()).expect(404);
+      await http.post(`${ruta}/movimientos`).set(R()).send({ tipo: 'Ingreso', moneda: 'PEN', monto: 5, motivo: 'No es su turno' }).expect(404);
+      t = (await http.get(ruta).set(N()).expect(200)).body;
+      expect(t.resumen).toMatchObject({ esperado: { soles: 70, dolares: 50 }, retiros: { soles: 300, dolares: 0 }, ingresos: { soles: 20, dolares: 0 } });
+      expect(t.movimientos.map((m: any) => [m.tipo, m.registradoPor])).toEqual([['Retiro', 'Ana Caja'], ['Ingreso', 'Administrador']]);
+
+      const sinMotivo = await http.post(`${ruta}/cerrar`).set(N()).send({ contadoSoles: 60, contadoDolares: 50 }).expect(400);
+      expect(sinMotivo.body).toEqual({ mensaje: 'El arqueo tiene un faltante de S/ 10.00: explica el motivo en las observaciones.', campo: 'observaciones' });
+      expect((await http.post(`${ruta}/cerrar`).set(N()).send({ denominaciones: { '50': 1, '10': 2 }, contadoSoles: 60, contadoDolares: 50 }).expect(400)).body.campo).toBe('contadoSoles');
+      const c = (await http.post(`${ruta}/cerrar`).set(N()).send({ denominaciones: { '50': 1, '10': 1 }, contadoSoles: 60, contadoDolares: 50, observaciones: 'Cambio mal entregado' }).expect(200)).body;
+      expect(c).toMatchObject({ estado: 'Cerrado', cerradoPor: 'Ana Caja', esperadoSoles: 70, contadoSoles: 60, diferenciaSoles: -10, esperadoDolares: 50, diferenciaDolares: 0,
+        denominaciones: { '50': 1, '10': 1 }, mensaje: `Turno N.° ${turnoAna} cerrado con un faltante de S/ 10.00.` });
+
+      expect((await cobrar(N(), await reserva(312), { monto: 1, metodo: 'Efectivo' }).expect(409)).body.mensaje).toBe('Abre tu turno de caja para cobrar en efectivo.');
+      expect((await http.post(`${ruta}/movimientos`).set(N()).send({ tipo: 'Ingreso', moneda: 'PEN', monto: 5, motivo: 'Turno cerrado' }).expect(409)).body.mensaje).toMatch(/ya está cerrado/);
+      await http.post(`${ruta}/cerrar`).set(N()).send({ contadoSoles: 70 }).expect(409);
+      const [b] = await db().query<any>(`SELECT usuario, descripcion FROM bitacora WHERE accion = 'turno.cerrar' AND entidad_id = $1`, [String(turnoAna)]);
+      expect(b).toMatchObject({ usuario: 'Ana Caja (Recepcionista)', descripcion: expect.stringContaining('faltante de S/ 10.00') });
+    });
+
+    it('el administrador ve todos los turnos, revisa el arqueo una vez y el arqueo cerrado no cambia', async () => {
+      const propios = (await http.get(`/api/gestion/turnos?desde=${hoy}&hasta=${hoy}`).set(N()).expect(200)).body;
+      expect(propios.map((t: any) => t.id)).toEqual([turnoAna]);
+      const todos = (await http.get(`/api/gestion/turnos?desde=${hoy}&hasta=${hoy}`).set(A()).expect(200)).body;
+      expect(todos.length).toBeGreaterThanOrEqual(3);
+      expect(todos.find((t: any) => t.id === turnoAna)).toMatchObject({ pagos: 3, cobrado: 400, diferenciaSoles: -10 });
+      expect(todos.find((t: any) => t.usuario === 'Administrador').esperadoActual).toEqual({ soles: expect.any(Number), dolares: 0 });
+      expect((await actual(A())).porRevisar).toBe(1);
+
+      await http.post(`/api/gestion/turnos/${turnoAna}/revisar`).set(R()).send({}).expect(403);
+      expect((await http.post(`/api/gestion/turnos/${turnoAna}/revisar`).set(A()).send({ nota: 'Conversado con Ana' }).expect(200)).body)
+        .toMatchObject({ revisadoPor: 'Administrador', notaRevision: 'Conversado con Ana' });
+      await http.post(`/api/gestion/turnos/${turnoAna}/revisar`).set(A()).send({}).expect(409);
+      expect((await actual(A())).porRevisar).toBe(0);
+      await expect(db().query('UPDATE turnos_caja SET contado_soles = 70 WHERE id = $1', [turnoAna])).rejects.toThrow(/no se puede modificar/);
+      await expect(db().query('DELETE FROM turnos_caja WHERE id = $1', [turnoAna])).rejects.toThrow(/no se borran/);
+
+      // Anular después del cierre: el arqueo guardado no cambia y lo esperado hoy refleja la anulación
+      const pago = (await ficha(codigo)).pagos.find((p: any) => p.metodo === 'Efectivo' && p.moneda === 'PEN');
+      expect((await http.post(`/api/gestion/pagos/${pago.id}/anular`).set(A()).send({ motivo: 'Digitado dos veces' }).expect(200)).body.advertencia)
+        .toMatch(`El pago es del turno de caja N.° ${turnoAna}, ya cerrado: su arqueo no cambia.`);
+      const t = (await http.get(`/api/gestion/turnos/${turnoAna}`).set(N()).expect(200)).body;
+      expect(t).toMatchObject({ esperadoSoles: 70, contadoSoles: 60, resumen: { esperado: { soles: -80, dolares: 50 } } });
+    });
+
+    it('la devolución en efectivo sale del turno de quien la entrega y no supera su caja', async () => {
+      const r = await reserva(302);
+      await cobrar(R(), r, { monto: 450, metodo: 'Efectivo' }).expect(200);
+      const pago = (await ficha(r)).pagos[0];
+      const turnoAdmin = (await actual(A())).turno;
+      await http.post(`/api/gestion/turnos/${turnoAdmin.id}/movimientos`).set(A())
+        .send({ tipo: 'Retiro', moneda: 'PEN', monto: turnoAdmin.resumen.esperado.soles - 100, motivo: 'Depósito en caja fuerte' }).expect(201);
+      expect((await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({ monto: 150, motivo: 'Cobro duplicado' }).expect(409)).body)
+        .toEqual({ mensaje: 'En tu caja solo debería haber S/ 100.00 en efectivo.', campo: 'monto' });
+      const dv = (await http.post(`/api/gestion/pagos/${pago.id}/devolver`).set(A()).send({ monto: 100, motivo: 'Cobro duplicado' }).expect(200)).body;
+      expect(dv).toMatchObject({ medio: 'Manual', estado: 'Completada', turnoId: turnoAdmin.id });
+      const t = (await actual(A())).turno;
+      expect(t.resumen.esperado.soles).toBe(0);
+      expect(t.devoluciones.map((x: any) => [x.monto, x.metodo])).toContainEqual([100, 'Efectivo']);
+    });
+
+    it('un cierre simultáneo con cobros: cada pago queda en el arqueo o se rechaza, nunca a medias', async () => {
+      const id = (await http.post('/api/gestion/turnos').set(N()).send({ fondoInicial: 0 }).expect(201)).body.id;
+      const codigos: string[] = [];
+      for (let i = 0; i < 4; i++) codigos.push(await reserva(304 + i * 2));
+      const [cierre, ...cobros] = await Promise.all([
+        http.post(`/api/gestion/turnos/${id}/cerrar`).set(N()).send({ contadoSoles: 0, observaciones: 'Prueba de cierre simultáneo' }),
+        ...codigos.map(c => cobrar(N(), c, { monto: 10, metodo: 'Efectivo' }))]);
+      expect(cierre.status).toBe(200);
+      const ok = cobros.filter(x => x.status === 200);
+      cobros.filter(x => x.status !== 200).forEach(x => { expect(x.status).toBe(409); expect(x.body.mensaje).toBe('Abre tu turno de caja para cobrar en efectivo.'); });
+      const [{ n }] = await db().query<any>('SELECT count(*) AS n FROM pagos WHERE turno_id = $1', [id]);
+      expect(n).toBe(ok.length);
+      expect(cierre.body.esperadoSoles).toBe(10 * ok.length);
     });
   });
 });

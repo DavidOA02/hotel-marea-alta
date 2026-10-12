@@ -24,7 +24,7 @@ export function Avisos() {
   const icono = { ok: CheckCircle2, error: OctagonAlert, warn: TriangleAlert };
   const color = { ok: 'bg-ocean', error: 'bg-bad', warn: 'bg-[#7A5418]' };
   return (
-    <div className="fixed bottom-4 right-4 z-[200] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
+    <div className="fixed bottom-4 right-4 z-[200] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2 print:hidden" aria-live="polite">
       {avisos.map(a => { const I = icono[a.tipo]; return (
         <div key={a.id} role={a.tipo === 'error' ? 'alert' : 'status'} className={`flex items-start gap-3 rounded-xl px-4 py-3 text-sm text-white shadow-xl ${color[a.tipo]}`}>
           <I className="mt-0.5 size-5 shrink-0" aria-hidden /> <span className="flex-1">{a.texto}</span>

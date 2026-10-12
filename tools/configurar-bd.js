@@ -73,7 +73,7 @@ async function conectar(cfg, db) { const cl = new Client({ ...cfg, database: db,
 
   const db = await conectar(cfg, base);
   const pasos = migrar ? [] : [['01_esquema.sql', 'Tablas, 24 habitaciones, usuarios y vistas de Power BI']];
-  pasos.push(['03_mejoras.sql', 'Bitácora, correos, cambios de habitación, pagos, devoluciones, facturación y encuestas']);
+  pasos.push(['03_mejoras.sql', 'Bitácora, correos, cambios de habitación, pagos, devoluciones, facturación, encuestas y caja por turnos']);
   if (demo) pasos.push(['02_datos_demo.sql', 'Datos de demostración (15 meses)']);
   for (const [archivo, texto] of pasos) {
     process.stdout.write(`  … ${texto}`);

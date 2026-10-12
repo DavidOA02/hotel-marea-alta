@@ -1,6 +1,7 @@
 import { cotizar, redondear, validarDocumento, validarTelefono, sumarDiasHabiles, diasEntre, enRango, sumarEstadias, horasParaLlegada,
   reservaWebSchema, reservaPanelSchema, pagoSchema, usuarioSchema, cambiarClaveSchema, reclamacionSchema, primerError, hoyLima, sumarDias,
-  recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema, notaCreditoSchema, devolucionSchema, encuestaSchema } from './index';
+  recalcularPorCambio, desglosar, cambioHabitacionSchema, comprobanteSchema, pagoEnLineaSchema, notaCreditoSchema, devolucionSchema, encuestaSchema,
+  sumarDenominaciones, efectivoEsperado, abrirTurnoSchema, movimientoCajaSchema, cerrarTurnoSchema } from './index';
 
 describe('Tarifas e IGV', () => {
   it('incluye IGV para residentes', () => {
@@ -141,5 +142,37 @@ describe('Esquemas Zod', () => {
     const res = reclamacionSchema.safeParse(r);
     expect(res.success).toBe(false);
     if (!res.success) expect(primerError(res.error).campo).toBe('apoderado');
+  });
+});
+
+describe('Caja por turnos y arqueo', () => {
+  it('suma el conteo por billetes y monedas sin errores de redondeo', () => {
+    expect(sumarDenominaciones({ '200': 1, '100': 2, '20': 3, '0.5': 3, '0.2': 1, '0.1': 3 })).toBe(462);
+    expect(sumarDenominaciones({ '0.1': 7 })).toBe(0.7);
+    expect(sumarDenominaciones({ '50': '2', '1': '' })).toBe(100);
+    expect(sumarDenominaciones({})).toBe(0);
+  });
+  it('efectivo esperado: fondo + cobros en efectivo − devoluciones en efectivo ± movimientos, con dólares aparte', () => {
+    expect(efectivoEsperado({
+      fondoInicial: 200,
+      cobros: [{ metodo: 'Efectivo', moneda: 'PEN', monto: 450 }, { metodo: 'Efectivo', moneda: 'USD', monto: 100 }, { metodo: 'Tarjeta', moneda: 'PEN', monto: 650 }],
+      devoluciones: [{ metodo: 'Efectivo', monto: 50 }, { metodo: 'Yape', monto: 30 }],
+      movimientos: [{ tipo: 'Retiro', moneda: 'PEN', monto: 300 }, { tipo: 'Ingreso', moneda: 'PEN', monto: 20.1 }, { tipo: 'Retiro', moneda: 'USD', monto: 40 }]
+    })).toEqual({ soles: 320.1, dolares: 60 });
+    expect(efectivoEsperado({ fondoInicial: 0, cobros: [], devoluciones: [], movimientos: [] })).toEqual({ soles: 0, dolares: 0 });
+  });
+  it('esquemas de apertura, movimiento y cierre', () => {
+    expect(abrirTurnoSchema.parse({ fondoInicial: '200', nota: '' })).toEqual({ fondoInicial: 200, nota: null });
+    expect(abrirTurnoSchema.safeParse({ fondoInicial: -1 }).success).toBe(false);
+    expect(abrirTurnoSchema.safeParse({ fondoInicial: '' }).success).toBe(false);
+    expect(abrirTurnoSchema.parse({ fondoInicial: 0 }).fondoInicial).toBe(0);
+    expect(movimientoCajaSchema.safeParse({ tipo: 'Retiro', moneda: 'PEN', monto: 0, motivo: 'Caja fuerte' }).success).toBe(false);
+    expect(cerrarTurnoSchema.parse({ contadoSoles: '350.5' })).toEqual({ contadoSoles: 350.5, contadoDolares: 0, observaciones: null });
+    expect(cerrarTurnoSchema.safeParse({ denominaciones: { '100': 3, '50': 1 }, contadoSoles: 350 }).success).toBe(true);
+    const distinto = cerrarTurnoSchema.safeParse({ denominaciones: { '100': 3 }, contadoSoles: 350 });
+    expect(distinto.success).toBe(false);
+    if (!distinto.success) expect(primerError(distinto.error).campo).toBe('contadoSoles');
+    expect(cerrarTurnoSchema.safeParse({ denominaciones: { '3': 1 }, contadoSoles: 3 }).success).toBe(false);
+    expect(cerrarTurnoSchema.safeParse({ denominaciones: { '10': 1.5 }, contadoSoles: 15 }).success).toBe(false);
   });
 });

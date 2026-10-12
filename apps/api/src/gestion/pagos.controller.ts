@@ -25,7 +25,7 @@ export class PagosController {
     let extra = '';
     if (metodo) { p.push(metodo); extra = ' AND p.metodo = $3'; }
     const pagos = await this.db.query<any>(`SELECT p.id, r.codigo AS codigo_reserva, p.pasarela, c.nombres || ' ' || c.apellidos AS cliente, p.monto, p.moneda, p.tipo_cambio,
-      p.monto_soles, p.metodo, p.referencia, p.estado, p.fecha_pago, p.registrado_por, p.motivo_anulacion
+      p.monto_soles, p.metodo, p.referencia, p.estado, p.fecha_pago, p.registrado_por, p.motivo_anulacion, p.turno_id
       FROM pagos p JOIN reservas r ON r.id = p.reserva_id JOIN clientes c ON c.id = r.cliente_id
       WHERE (p.fecha_pago AT TIME ZONE 'America/Lima') >= $1::date AND (p.fecha_pago AT TIME ZONE 'America/Lima') < $2::date ${extra}
       ORDER BY p.fecha_pago DESC`, p);
@@ -49,7 +49,8 @@ export class PagosController {
   @Post(':id/anular') @HttpCode(200) @Roles('Administrador')
   anular(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(anularPagoSchema)) d: { motivo: string }) {
     return this.db.transaccion(async c => {
-      const p = await this.db.uno<any>(`SELECT p.estado, p.monto_soles, p.metodo, p.pasarela, r.codigo, r.estado AS estado_reserva,
+      const p = await this.db.uno<any>(`SELECT p.estado, p.monto_soles, p.metodo, p.pasarela, p.turno_id, r.codigo, r.estado AS estado_reserva,
+        (SELECT t.estado FROM turnos_caja t WHERE t.id = p.turno_id) AS estado_turno,
         EXISTS (SELECT 1 FROM comprobantes k WHERE k.reserva_id = r.id AND ${SQL_VIGENTE}) AS con_comprobante,
         EXISTS (SELECT 1 FROM devoluciones dv WHERE dv.pago_id = p.id AND dv.estado <> 'Fallida') AS con_devoluciones
         FROM pagos p JOIN reservas r ON r.id = p.reserva_id WHERE p.id = $1 FOR UPDATE OF p`, [id], c);
@@ -62,7 +63,8 @@ export class PagosController {
         descripcion: `Pago de S/ ${p.montoSoles.toFixed(2)} (${p.pasarela ? `en línea, ${p.pasarela}` : p.metodo}) anulado. Motivo: ${d.motivo}`,
         datos: { pagoId: id, montoSoles: p.montoSoles, motivo: d.motivo } }, c);
       const avisos = [p.pasarela ? `Este pago se cobró en línea con ${p.pasarela}: la anulación no devuelve el dinero; haz la devolución desde el panel de la pasarela.` : null,
-        p.conComprobante ? 'La reserva tiene un comprobante electrónico: evalúa anularlo o emitir una nota de crédito.' : null].filter(Boolean);
+        p.conComprobante ? 'La reserva tiene un comprobante electrónico: evalúa anularlo o emitir una nota de crédito.' : null,
+        p.estadoTurno === 'Cerrado' ? `El pago es del turno de caja N.° ${p.turnoId}, ya cerrado: su arqueo no cambia.` : null].filter(Boolean);
       return { id, mensaje: 'Pago anulado.', advertencia: avisos.length ? avisos.join(' ') : null };
     });
   }
@@ -70,7 +72,7 @@ export class PagosController {
   /** Devuelve por Culqi, Mercado Pago o Niubiz, o registra la devolución manual. */
   @Post(':id/devolver') @HttpCode(200) @Roles('Administrador')
   devolver(@Param('id', ParseIntPipe) id: number, @Usuario() u: UsuarioSesion, @Body(new ZodPipe(devolucionSchema)) d: z.output<typeof devolucionSchema>) {
-    return this.devoluciones.devolver(id, d, u.nombre);
+    return this.devoluciones.devolver(id, d, u);
   }
 
   @Post('devoluciones/:id/reintentar') @HttpCode(200) @Roles('Administrador')

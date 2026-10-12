@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { ENTIDADES_BITACORA, hoyLima, sumarDias } from '@marea/shared';
@@ -7,7 +8,7 @@ import { BotonP, Cabecera, Cargando, Modal, useDatos } from '@/components/panel/
 import { Tabla, columnas } from '@/components/panel/tabla';
 import { useFicha } from '@/components/panel/reservas';
 
-const ENTIDAD: Record<string, string> = { reserva: 'Reserva', pago: 'Pago', cliente: 'Cliente', habitacion: 'Habitación', tipo: 'Tipo y tarifa', usuario: 'Usuario',
+const ENTIDAD: Record<string, string> = { reserva: 'Reserva', pago: 'Pago', turno: 'Turno de caja', cliente: 'Cliente', habitacion: 'Habitación', tipo: 'Tipo y tarifa', usuario: 'Usuario',
   reclamo: 'Reclamo', comprobante: 'Comprobante', correo: 'Correo', sesion: 'Sesión' };
 const esCambio = (v: any) => v && typeof v === 'object' && 'antes' in v && 'despues' in v;
 const texto = (v: unknown) => (v === null || v === undefined || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
@@ -30,6 +31,7 @@ export default function Bitacora() {
     c.accessor('accion', { header: 'Acción', cell: i => <code className="text-xs">{i.getValue()}</code> }),
     c.accessor('entidadId', { header: 'Registro', cell: i => { const e = i.row.original; return e.entidad === 'reserva' && e.entidadId
       ? <button className="font-mono font-semibold text-ocean underline decoration-gold" onClick={x => { x.stopPropagation(); abrir(e.entidadId); }}>{e.entidadId}</button>
+      : e.entidad === 'turno' && e.entidadId ? <Link href={`/panel/caja/turnos/${e.entidadId}`} onClick={x => x.stopPropagation()} className="text-ocean underline decoration-gold">Turno N.° {e.entidadId}</Link>
       : <>{ENTIDAD[e.entidad] ?? e.entidad}{e.entidadId && <span className="block text-xs text-muted">{e.entidadId}</span>}</>; } }),
     c.accessor('descripcion', { header: 'Descripción', cell: i => <span className="line-clamp-2 max-w-xl">{i.getValue()}</span> })
   ];

@@ -87,6 +87,24 @@ BEGIN
           'Demora de 40 minutos en el check-in.', 'Mejorar los tiempos de atención.', 'Pendiente', hoy + 15, NULL, NULL);
 
   INSERT INTO suscriptores (email) SELECT email FROM clientes WHERE acepta_publicidad ORDER BY id LIMIT 40;
+
+  -- Turnos de caja de Recepción en la última semana, de 07:00 a 23:00, con su arqueo (un faltante ya revisado y un sobrante)
+  FOR k IN REVERSE 7..1 LOOP
+    d := hoy - k;
+    INSERT INTO turnos_caja (usuario_id, usuario, fondo_inicial, fecha_apertura)
+    SELECT id, nombre, 200, (d + time '07:00') AT TIME ZONE 'America/Lima' FROM usuarios WHERE email = 'recepcion@mareaalta.pe'
+    RETURNING id INTO rid;
+    UPDATE pagos SET turno_id = rid
+    WHERE registrado_por = 'Recepción' AND turno_id IS NULL AND (fecha_pago AT TIME ZONE 'America/Lima')::date = d;
+    SELECT 200 + coalesce(sum(monto) FILTER (WHERE metodo = 'Efectivo'), 0) INTO bruto FROM pagos WHERE turno_id = rid AND estado = 'Aprobado';
+    UPDATE turnos_caja SET estado = 'Cerrado', fecha_cierre = (d + time '23:00') AT TIME ZONE 'America/Lima', cerrado_por = usuario,
+      esperado_soles = bruto, esperado_dolares = 0, contado_soles = bruto + CASE k WHEN 5 THEN -10 WHEN 2 THEN 0.5 ELSE 0 END, contado_dolares = 0,
+      observaciones = CASE k WHEN 5 THEN 'Faltan S/ 10 al contar la caja; no se encontró el motivo.' WHEN 2 THEN 'Sobran S/ 0.50; no se identificó el origen.' END,
+      revisado_por = CASE WHEN k = 5 THEN 'Administrador' END,
+      fecha_revision = CASE WHEN k = 5 THEN (d + 1 + time '09:00') AT TIME ZONE 'America/Lima' END,
+      nota_revision = CASE WHEN k = 5 THEN 'Revisado con recepción; se repone del fondo de imprevistos.' END
+    WHERE id = rid;
+  END LOOP;
 END $$;
 
 SELECT estado_reserva, count(*) AS reservas, sum(total) AS total FROM vw_reservas_powerbi GROUP BY estado_reserva ORDER BY reservas DESC;

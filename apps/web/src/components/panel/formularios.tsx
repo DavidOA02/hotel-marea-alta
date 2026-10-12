@@ -15,7 +15,7 @@ import { AlertaForm, Campo } from './campo';
  * Modal de formulario genérico: React Hook Form + esquema Zod compartido.
  * Los errores de la API ({ mensaje, campo }) se marcan en el campo correspondiente.
  */
-function FormularioModal<T extends FieldValues>({ abierto, alCerrar, titulo, esquema, valores, enviar, boton = 'Guardar', peligro = false, ancho, children }: {
+export function FormularioModal<T extends FieldValues>({ abierto, alCerrar, titulo, esquema, valores, enviar, boton = 'Guardar', peligro = false, ancho, children }: {
   abierto: boolean; alCerrar: () => void; titulo: string; esquema: ZodType; valores: Partial<T>; enviar: (d: any) => Promise<any>;
   boton?: string; peligro?: boolean; ancho?: string; children: (f: UseFormReturn<T>) => React.ReactNode;
 }) {
@@ -37,7 +37,7 @@ function FormularioModal<T extends FieldValues>({ abierto, alCerrar, titulo, esq
     </Modal>
   );
 }
-const err = (f: UseFormReturn<any>, k: string) => (f.formState.errors as any)[k]?.message as string | undefined;
+export const err = (f: UseFormReturn<any>, k: string) => (f.formState.errors as any)[k]?.message as string | undefined;
 
 export function FormHabitacion({ h, tipos, abierto, alCerrar }: { h: any | null; tipos: any[]; abierto: boolean; alCerrar: () => void }) {
   return (
@@ -109,7 +109,7 @@ export function FormUsuario({ u, abierto, alCerrar }: { u: any | null; abierto: 
         <label className="flex items-end gap-2 pb-2 text-sm"><input type="checkbox" className="size-4 accent-ocean" {...f.register('activo')} />Usuario activo</label>
         <Campo etiqueta={u ? 'Nueva contraseña temporal (vacía = no cambiar)' : 'Contraseña temporal'} className="sm:col-span-2" error={err(f, 'clave')} ayuda="Mínimo 8 caracteres con letras y números. Se pedirá cambiarla al ingresar.">
           <input type="text" autoComplete="new-password" {...f.register('clave')} /></Campo>
-        <p className="text-xs text-muted sm:col-span-2"><strong>Recepcionista:</strong> recepción, reservas, habitaciones (limpieza), clientes, caja y reclamaciones (lectura). <strong>Administrador:</strong> además reportes, tarifas, CRUD de habitaciones, anulación de pagos, respuesta a reclamos y usuarios.</p>
+        <p className="text-xs text-muted sm:col-span-2"><strong>Recepcionista:</strong> recepción, reservas, habitaciones (limpieza), clientes, caja (su propio turno y arqueo) y reclamaciones (lectura). <strong>Administrador:</strong> además reportes, tarifas, CRUD de habitaciones, anulación de pagos, devoluciones, revisión de arqueos de todos los turnos, respuesta a reclamos y usuarios.</p>
       </div>}
     </FormularioModal>
   );
