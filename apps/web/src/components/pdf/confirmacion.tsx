@@ -54,11 +54,17 @@ function EmblemaPdf({ tam = 46 }: { tam?: number }) {
   );
 }
 
+function Fila({ k, v }: { k: string; v: string }) {
+  return <View style={e.fila}><Text style={e.etiqueta}>{k}</Text><Text style={e.valor}>{v}</Text></View>;
+}
+
+function Monto({ k, v, estilo }: { k: string; v: string; estilo?: any }) {
+  return <View style={[e.filaMonto, estilo ?? {}]}><Text>{k}</Text><Text>{v}</Text></View>;
+}
+
 /** Confirmación de reserva en PDF (react-pdf). Se genera en el navegador del huésped o del recepcionista. */
 export function ConfirmacionPdf({ r }: { r: DatosConfirmacion }) {
   const saldo = r.pagado != null ? r.total - r.pagado : null;
-  const Fila = ({ k, v }: { k: string; v: string }) => <View style={e.fila}><Text style={e.etiqueta}>{k}</Text><Text style={e.valor}>{v}</Text></View>;
-  const Monto = ({ k, v, estilo }: { k: string; v: string; estilo?: any }) => <View style={[e.filaMonto, estilo ?? {}]}><Text>{k}</Text><Text>{v}</Text></View>;
   return (
     <Document title={`Reserva ${r.codigo} · ${HOTEL.nombre}`} author={HOTEL.razon} language="es-PE">
       <Page size="A4" style={e.pagina}>

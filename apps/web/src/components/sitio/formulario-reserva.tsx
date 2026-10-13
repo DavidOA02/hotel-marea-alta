@@ -20,7 +20,7 @@ export function FormularioReserva() {
   const { tipos, moneda, apiDisponible } = useTipos();
   const { borrador, setBorrador } = useReserva();
   const [libres, setLibres] = useState<Record<string, number> | null>(null);
-  const [confirmada, setConfirmada] = useState<(DatosConfirmacion & { email: string; puedePagarEnLinea: boolean }) | null>(null);
+  const [confirmada, setConfirmada] = useState<(DatosConfirmacion & { email: string; puedePagarEnLinea: boolean; correoRegistrado?: boolean }) | null>(null);
   const [pagando, setPagando] = useState(false);
   const router = useRouter();
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null);
@@ -96,7 +96,9 @@ export function FormularioReserva() {
       <p className="eyebrow">Código de reserva {confirmada.codigo}</p>
       <h3 className="display text-4xl">¡Listo, {confirmada.titular.split(' ')[0]}! Tu reserva está confirmada</h3>
       <p>{confirmada.tipoHabitacion} N.° {confirmada.habitacion}, del {fechaDia(confirmada.fechaEntrada)} al {fechaDia(confirmada.fechaSalida)} ({confirmada.noches} {confirmada.noches === 1 ? 'noche' : 'noches'}). Total: <strong>{soles(confirmada.total)}</strong>{confirmada.exoneradoIgv ? ', exonerado de IGV' : ', IGV incluido'}. {confirmada.puedePagarEnLinea ? 'Puedes pagar al llegar o ahora en línea.' : 'Pagas al llegar.'}</p>
-      <p className="text-muted">Te enviamos la confirmación a {confirmada.email}. Guarda tu código: con él puedes consultar o cancelar tu reserva (hasta 72 h antes) en «Mi reserva».</p>
+      {confirmada.correoRegistrado
+        ? <p className="text-muted">Tu documento ya estaba registrado con otro correo: te enviamos la confirmación a ese correo y no cambiamos tus datos. Guarda tu código y úsalo con ese correo en «Mi reserva». Si tu correo cambió, <a className="font-medium text-ocean underline" href={enlaceWhatsapp(`Hola, hice la reserva ${confirmada.codigo} y quiero actualizar mi correo.`)} target="_blank" rel="noopener">escríbenos por WhatsApp</a> y lo actualizamos.</p>
+        : <p className="text-muted">Te enviamos la confirmación a {confirmada.email}. Guarda tu código: con él puedes consultar o cancelar tu reserva (hasta 72 h antes) en «Mi reserva».</p>}
       <div className="mt-4 flex flex-wrap justify-center gap-3">
         {confirmada.puedePagarEnLinea && <button className="btn-oro" disabled={pagando} onClick={pagarEnLinea}><CreditCard className="size-4" aria-hidden />{pagando ? 'Preparando…' : 'Pagar ahora en línea'}</button>}
         <button className={confirmada.puedePagarEnLinea ? 'btn-borde' : 'btn-oro'} onClick={() => descargarConfirmacion(confirmada).catch(() => avisar('No se pudo generar el PDF.', 'error'))}><Download className="size-4" aria-hidden />Descargar confirmación (PDF)</button>

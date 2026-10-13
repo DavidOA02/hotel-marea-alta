@@ -55,7 +55,8 @@ export function Tabla<T extends Record<string, any>>({ datos, columnas: cols, bu
             className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-3 text-sm hover:bg-sand"><Download className="size-4" aria-hidden />CSV</button>}
         </div>
       )}
-      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={`Tabla de ${etiqueta}`}>
+      {/* relative: los textos sr-only (posición absoluta) de las cabeceras quedan dentro del scroll y no ensanchan la página */}
+      <div className="relative overflow-x-auto" tabIndex={0} role="region" aria-label={`Tabla de ${etiqueta}`}>
         <table className="w-full text-sm max-sm:[&_thead]:hidden">
           <thead className="bg-[#FAF9F6]">
             {tabla.getHeaderGroups().map(g => (

@@ -4,5 +4,13 @@ dist/
 coverage/
 .env
 .env.local
+.env.sandbox
 *.log
 *.tsbuildinfo
+# Lo genera Next.js (next dev, next build o next typegen); su documentación pide no versionarlo
+next-env.d.ts
+# Registros que generan las herramientas del agente en cada carpeta de trabajo
+receipts/
+review-receipts/
+# Estado de la ventana de Obsidian (personal, cambia en cada uso)
+docs/.obsidian/workspace.json

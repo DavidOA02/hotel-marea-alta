@@ -179,10 +179,11 @@ function Alertas() {
 
 /** Cierre de sesión tras X minutos sin actividad (PC compartida de recepción), con aviso previo. */
 function Inactividad({ alExpirar }: { alExpirar: () => void }) {
-  const ultima = useRef(Date.now());
+  const ultima = useRef(0);
   const [resta, setResta] = useState<number | null>(null);
   useEffect(() => {
     const limite = MINUTOS_INACTIVIDAD * 60_000, aviso = Math.min(120_000, limite / 2);
+    if (!ultima.current) ultima.current = Date.now();
     const marcar = () => { ultima.current = Date.now(); };
     const ev = ['mousedown', 'keydown', 'touchstart', 'wheel'];
     ev.forEach(e => document.addEventListener(e, marcar, { passive: true }));

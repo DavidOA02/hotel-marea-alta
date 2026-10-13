@@ -38,8 +38,12 @@ export class PublicoController {
 
   @Post('reservas') @Limite(10)
   async crear(@Body(new ZodPipe(reservaWebSchema)) d: z.output<typeof reservaWebSchema>) {
-    const r = await this.reservas.crear({ ...d, cliente: d, canal: 'Web', clienteId: null, habitacionId: null });
-    return { ...r, puedePagarEnLinea: ReservasService.puedePagarEnLinea({ estado: r.estado, saldo: r.total }), mensaje: 'Reserva confirmada. Te enviamos los detalles a tu correo.' };
+    const r = await this.reservas.crear({ ...d, cliente: d, canal: 'Web', clienteId: null, habitacionId: null, webPublica: true });
+    // Si el documento ya tenía otro correo, el pago en línea y «Mi reserva» piden ese correo: no se ofrece pagar desde aquí
+    return { ...r, puedePagarEnLinea: !r.correoRegistrado && ReservasService.puedePagarEnLinea({ estado: r.estado, saldo: r.total }),
+      mensaje: r.correoRegistrado
+        ? 'Reserva confirmada. Tu documento ya estaba registrado con otro correo: te enviamos los detalles a ese correo y no cambiamos tus datos.'
+        : 'Reserva confirmada. Te enviamos los detalles a tu correo.' };
   }
 
   @Get('reservas/:codigo') @Limite(20)

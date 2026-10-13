@@ -56,7 +56,7 @@ export class Devoluciones implements OnModuleInit, OnModuleDestroy {
   async devolver(pagoId: number, d: { monto: number; motivo: string; reducirTotal: boolean }, usuario: { id: number; nombre: string }) {
     const registradoPor = usuario.nombre;
     const monto = redondear(d.monto);
-    const { dev, nota, pago } = await this.db.transaccion(async c => {
+    const { dev, nota } = await this.db.transaccion(async c => {
       const p = await this.db.uno<any>(`SELECT p.id, p.reserva_id, p.monto, p.moneda, p.tipo_cambio, p.monto_soles, p.metodo, p.referencia, p.pasarela, p.estado, r.codigo
         FROM pagos p JOIN reservas r ON r.id = p.reserva_id WHERE p.id = $1 FOR UPDATE OF p`, [pagoId], c);
       if (!p) throw falla(404, 'Pago no encontrado.');

@@ -108,6 +108,21 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect((await http.get('/api/gestion/reportes').set(A())).status).toBe(200);
     });
 
+    it('todas las rutas solo de administrador: sin token → 401; recepcionista → 403', async () => {
+      // IDs inexistentes y cuerpos vacíos: si faltara el guard, la ruta respondería 400/404 sin cambiar datos
+      const rutas: ['get' | 'post' | 'put' | 'patch' | 'delete', string][] = [
+        ['get', 'usuarios'], ['post', 'usuarios'], ['put', 'usuarios/999999'], ['patch', 'reclamaciones/0000000-2026/respuesta'], ['get', 'suscriptores'],
+        ['post', 'habitaciones'], ['put', 'habitaciones/999999'], ['delete', 'habitaciones/999999'], ['post', 'tipos'], ['put', 'tipos/999999'],
+        ['get', 'reportes'], ['get', 'bitacora'], ['get', 'encuestas'], ['post', 'reservas/MA0000000/consumos/999999/anular'],
+        ['post', 'pagos/999999/anular'], ['post', 'pagos/999999/devolver'], ['post', 'pagos/devoluciones/999999/reintentar'], ['post', 'pagos/devoluciones/999999/conciliar-niubiz'],
+        ['post', 'turnos/999999/revisar'], ['post', 'comprobantes/999999/nota-credito'], ['post', 'comprobantes/999999/anular'], ['post', 'comprobantes/999999/nota-debito']
+      ];
+      for (const [metodo, ruta] of rutas) {
+        expect([ruta, (await http[metodo](`/api/gestion/${ruta}`).send({})).status]).toEqual([ruta, 401]);
+        expect([ruta, (await http[metodo](`/api/gestion/${ruta}`).set(R()).send({})).status]).toEqual([ruta, 403]);
+      }
+    });
+
     it('bloquea la cuenta tras 5 intentos fallidos', async () => {
       await http.post('/api/gestion/usuarios').set(A()).send({ nombre: 'Luis', email: 'luis@mareaalta.pe', rol: 'Recepcionista', clave: 'Luis2026x' }).expect(201);
       for (let i = 0; i < 5; i++) await http.post('/api/auth/login').send({ email: 'luis@mareaalta.pe', clave: 'mala' }).expect(401);
@@ -994,6 +1009,28 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect((await http.post('/api/reservas').send(huesped(900, { fechaEntrada: `${anio}-02-30`, fechaSalida: `${anio}-03-02` })).expect(400)).body.campo).toBe('fechaEntrada');
       // Un id fuera del rango de PostgreSQL es un dato no válido, no un error del servidor
       await http.get('/api/gestion/clientes/99999999999').set(R()).expect(400);
+    });
+
+    it('una reserva web con un documento ya registrado con otro correo no cambia la ficha del cliente', async () => {
+      const fechas = { tipoHabitacion: 'duna', fechaEntrada: d(120), fechaSalida: d(121) };
+      const cliente = async () => (await db().query<any>(`SELECT nombres, email, telefono FROM clientes WHERE tipo_documento = 'DNI' AND numero_documento = '41000910'`))[0];
+      const propia = (await http.post('/api/reservas').send(huesped(910, fechas)).expect(201)).body;
+      expect(propia.correoRegistrado).toBe(false);
+      // Alguien que conoce el DNI reserva con su propio correo: la reserva se hace, pero la ficha y el acceso no cambian
+      const ajena = (await http.post('/api/reservas').send(huesped(910, { ...fechas, nombres: 'Intruso', apellidos: 'Ajeno', email: 'intruso@prueba.pe', telefono: '911222333' })).expect(201)).body;
+      expect(ajena).toMatchObject({ correoRegistrado: true, puedePagarEnLinea: false });
+      expect(ajena.mensaje).toMatch(/ya estaba registrado con otro correo/);
+      expect(await cliente()).toEqual({ nombres: 'Huésped910', email: 'h910@prueba.pe', telefono: '987654321' });
+      await http.get(`/api/reservas/${propia.codigo}?email=intruso@prueba.pe`).expect(404);
+      await http.post('/api/pagos-en-linea').send({ codigo: ajena.codigo, email: 'intruso@prueba.pe' }).expect(404);
+      await http.get(`/api/reservas/${ajena.codigo}?email=h910@prueba.pe`).expect(200);
+      const f = await ficha(ajena.codigo);
+      expect(f.correos.map((x: any) => x.para)).toEqual(['h910@prueba.pe']);
+      expect(f.historial[0].descripcion).toMatch(/intruso@prueba\.pe, \+51 911222333\): no se cambió la ficha del cliente/);
+      // El titular, con su mismo correo, sí actualiza sus datos al volver a reservar
+      const vuelve = (await http.post('/api/reservas').send(huesped(910, { ...fechas, fechaEntrada: d(122), fechaSalida: d(123), telefono: '944555666' })).expect(201)).body;
+      expect(vuelve.correoRegistrado).toBe(false);
+      expect((await cliente()).telefono).toBe('944555666');
     });
   });
 });
