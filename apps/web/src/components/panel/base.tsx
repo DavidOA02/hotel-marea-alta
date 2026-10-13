@@ -12,10 +12,15 @@ export function useDatos<T>(ruta: string | null) {
   const [datos, setDatos] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
+  const ultima = useRef(0);
   const cargar = useCallback(async () => {
     if (!ruta) return;
+    // Solo cuenta la última petición: una respuesta lenta de un filtro anterior no pisa la actual
+    const yo = ++ultima.current;
     setCargando(true);
-    try { setDatos(await apiPanel<T>(ruta)); setError(null); } catch (e: any) { setError(e.message); } finally { setCargando(false); }
+    try { const x = await apiPanel<T>(ruta); if (yo === ultima.current) { setDatos(x); setError(null); } }
+    catch (e: any) { if (yo === ultima.current) setError(e.message); }
+    finally { if (yo === ultima.current) setCargando(false); }
   }, [ruta]);
   useEffect(() => { cargar(); }, [cargar, n]);
   return { datos, error, cargando, recargar: cargar };

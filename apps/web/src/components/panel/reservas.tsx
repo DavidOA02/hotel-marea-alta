@@ -44,10 +44,16 @@ export function FichaReserva() {
   const [d, setD] = useState<any>(null);
   const [n, setN] = useState(0);
   const [cambio, setCambio] = useState(false);
-  useEffect(() => { if (!codigo) { setD(null); setCambio(false); return; } apiPanel(`/gestion/reservas/${codigo}`).then(setD).catch(e => avisar(e.message, 'error')); }, [codigo, n]);
+  useEffect(() => {
+    if (!codigo) { setD(null); setCambio(false); return; }
+    // Si se abre otra reserva antes de que llegue esta respuesta, se descarta: los botones actúan sobre «codigo»
+    let vigente = true;
+    apiPanel(`/gestion/reservas/${codigo}`).then(x => { if (vigente) setD(x); }).catch(e => { if (vigente) avisar(e.message, 'error'); });
+    return () => { vigente = false; };
+  }, [codigo, n]);
   const recargar = () => setN(x => x + 1);
   const hoy = hoyLima();
-  const r = d?.reserva;
+  const r = d && d.reserva.codigo === codigo?.toUpperCase() ? d.reserva : null;   // datos de otra reserva = aún cargando
   const cod = codigo ?? '';
   const ejecutar = async (accion: string, body: object = {}) => { if (await accionReserva(`/gestion/reservas/${cod}/${accion}`, body)) recargar(); };
 
@@ -203,13 +209,16 @@ export function FormularioNuevaReserva() {
   const v = watch();
   useEffect(() => { // búsqueda de clientes
     if (modo !== 'buscar' || q.trim().length < 2) { setResultados([]); return; }
-    const t = setTimeout(() => apiPanel(`/gestion/clientes?limite=8&buscar=${encodeURIComponent(q.trim())}`).then(setResultados).catch(() => {}), 250);
-    return () => clearTimeout(t);
+    let vigente = true;
+    const t = setTimeout(() => apiPanel(`/gestion/clientes?limite=8&buscar=${encodeURIComponent(q.trim())}`).then(x => { if (vigente) setResultados(x); }).catch(() => {}), 250);
+    return () => { vigente = false; clearTimeout(t); };
   }, [q, modo]);
   useEffect(() => { // disponibilidad y cotización reales
     if (!v.fechaEntrada || !v.fechaSalida || v.fechaSalida <= v.fechaEntrada) { setDisp(null); return; }
-    const t = setTimeout(() => apiPanel(`/disponibilidad?entrada=${v.fechaEntrada}&salida=${v.fechaSalida}&huespedes=${v.huespedes || 1}`).then(setDisp).catch(() => setDisp(null)), 250);
-    return () => clearTimeout(t);
+    let vigente = true;
+    const t = setTimeout(() => apiPanel(`/disponibilidad?entrada=${v.fechaEntrada}&salida=${v.fechaSalida}&huespedes=${v.huespedes || 1}`)
+      .then(x => { if (vigente) setDisp(x); }).catch(() => { if (vigente) setDisp(null); }), 250);
+    return () => { vigente = false; clearTimeout(t); };
   }, [v.fechaEntrada, v.fechaSalida, v.huespedes]);
 
   const cambiarModo = (m: 'buscar' | 'nuevo') => {

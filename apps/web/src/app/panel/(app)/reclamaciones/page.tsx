@@ -16,7 +16,13 @@ export default function Reclamaciones() {
   const [responder, setResponder] = useState<any>(null);
   const [correos, setCorreos] = useState<any[] | null>(null);
   const n = useRefresco(s => s.n);
-  useEffect(() => { setCorreos(null); if (ver) apiPanel(`/gestion/reclamaciones/${ver.numero}`).then(x => setCorreos(x.correos)).catch(() => setCorreos([])); }, [ver, n]);
+  useEffect(() => {
+    setCorreos(null);
+    if (!ver) return;
+    let vigente = true;   // los correos de un reclamo anterior no se muestran en el actual
+    apiPanel(`/gestion/reclamaciones/${ver.numero}`).then(x => { if (vigente) setCorreos(x.correos); }).catch(() => { if (vigente) setCorreos([]); });
+    return () => { vigente = false; };
+  }, [ver, n]);
   const hoy = hoyLima();
   if (!datos) return <Cargando />;
   const pend = datos.filter(r => r.estado === 'Pendiente');
