@@ -109,7 +109,7 @@ export class Mantenimiento {
     });
   }
 
-  async iniciar(id: number, u: UsuarioSesion) {
+  async iniciar(id: number, _u: UsuarioSesion) {
     return this.db.transaccion(async c => {
       const m = await this.abierta(c, id);
       if (m.estado === 'EnProceso') throw falla(409, `La orden N.° ${id} ya está en proceso.`);

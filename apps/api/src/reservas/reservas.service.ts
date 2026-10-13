@@ -19,6 +19,8 @@ export interface Solicitud {
   tipoHabitacion: string; habitacionId?: number | null; fechaEntrada: string; fechaSalida: string; huespedes: number;
   residencia: 'PE' | 'EXT'; clienteId?: number | null; cliente?: DatosCliente | null; canal: string;
   horaLlegada?: string | null; notas?: string | null; aceptaPublicidad?: boolean; registradoPor?: string | null; checkInInmediato?: boolean;
+  /** Reserva del huésped en la web pública: no puede cambiar la ficha de un cliente registrado con otro correo. */
+  webPublica?: boolean;
 }
 export interface CambioHabitacion { habitacionId: number; tarifa: 'Mantener' | 'Recalcular'; motivo: string }
 
@@ -83,7 +85,15 @@ export class ReservasService {
       : falla(409, `No quedan habitaciones ${tipo.nombre} para esas fechas. Prueba otras fechas u otro tipo de habitación.`, 'fechaEntrada');
 
     let clienteId: number;
-    if (s.clienteId) {
+    // Documento ya registrado con otro correo desde la web pública: se enlaza al cliente sin tocar su ficha
+    // (quien conoce un DNI no puede cambiar el correo del titular ni ver sus reservas en «Mi reserva»)
+    let correoRegistrado = false;
+    const existente = s.webPublica && s.cliente ? await this.db.uno<{ id: number; email: string }>(
+      'SELECT id, email FROM clientes WHERE tipo_documento = $1 AND numero_documento = $2 FOR UPDATE', [s.cliente.tipoDocumento, s.cliente.numeroDocumento], c) : null;
+    if (existente && existente.email.trim().toLowerCase() !== s.cliente!.email.trim().toLowerCase()) {
+      clienteId = existente.id;
+      correoRegistrado = true;
+    } else if (s.clienteId) {
       const cl = await this.db.uno<{ id: number; tipoDocumento: string }>('SELECT id, tipo_documento FROM clientes WHERE id = $1', [s.clienteId], c);
       if (!cl) throw falla(404, 'Cliente no encontrado.', 'clienteId');
       if (s.residencia === 'EXT' && cl.tipoDocumento !== 'PAS') throw falla(400, 'Para la exoneración de IGV el cliente debe estar registrado con pasaporte.', 'residencia');
@@ -116,13 +126,16 @@ export class ReservasService {
     // Bitácora y correo de confirmación en la misma transacción: si la reserva no se guarda, tampoco ellos
     const datos = (await this.db.uno<any>(SQL_RESERVA + ' WHERE r.id = $1', [res.id], c))!;
     await this.bitacora.registrar({ accion: 'reserva.crear', entidad: 'reserva', entidadId: codigo,
-      descripcion: `Reserva ${codigo} (${ETIQUETAS[s.canal] ?? s.canal}) para ${datos.cliente}: ${tipo.nombre} ${libre.numero} del ${dmy(s.fechaEntrada)} al ${dmy(s.fechaSalida)} · ${soles(q.total)}${s.checkInInmediato ? ' · con check-in inmediato' : ''}`,
-      datos: { clienteId, habitacion: libre.numero, fechaEntrada: s.fechaEntrada, fechaSalida: s.fechaSalida, huespedes: s.huespedes, total: q.total, canal: s.canal } }, c);
+      descripcion: `Reserva ${codigo} (${ETIQUETAS[s.canal] ?? s.canal}) para ${datos.cliente}: ${tipo.nombre} ${libre.numero} del ${dmy(s.fechaEntrada)} al ${dmy(s.fechaSalida)} · ${soles(q.total)}${s.checkInInmediato ? ' · con check-in inmediato' : ''}`
+        + (correoRegistrado ? `. En la web se indicó otro contacto (${s.cliente!.nombres} ${s.cliente!.apellidos}, ${s.cliente!.email}, +${s.cliente!.codigoPais} ${s.cliente!.telefono}): `
+          + 'no se cambió la ficha del cliente y la confirmación fue al correo registrado. Verifica la identidad antes de actualizarla.' : ''),
+      datos: { clienteId, habitacion: libre.numero, fechaEntrada: s.fechaEntrada, fechaSalida: s.fechaSalida, huespedes: s.huespedes, total: q.total, canal: s.canal,
+        ...(correoRegistrado ? { contactoWeb: { nombres: s.cliente!.nombres, apellidos: s.cliente!.apellidos, email: s.cliente!.email, telefono: `+${s.cliente!.codigoPais} ${s.cliente!.telefono}` } } : {}) } }, c);
     await this.correos.encolar({ tipo: 'confirmacion', para: datos.email, reservaId: res.id, ...confirmacionReserva(datos, !!pasarelaActiva()) }, c);
 
     this.log.log(`Reserva ${codigo} (${s.canal}) ${tipo.nombre} ${libre.numero} del ${s.fechaEntrada} al ${s.fechaSalida}`);
     return { codigo, estado, tipoHabitacion: tipo.nombre, habitacion: libre.numero, fechaEntrada: s.fechaEntrada, fechaSalida: s.fechaSalida,
-      huespedes: s.huespedes, ...q };
+      huespedes: s.huespedes, ...q, correoRegistrado };
   }
 
   /** Disponibilidad y cotización (residentes) por tipo de habitación. */

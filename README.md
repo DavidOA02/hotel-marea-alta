@@ -48,8 +48,13 @@ El primer ingreso obliga a cambiar la contraseña. El recuadro «Usuarios de pru
 | `npm run db:migrar` | Aplica `database/03_mejoras.sql` a la base existente **sin borrar datos** (se puede repetir) |
 | `npm test` | Pruebas Jest unitarias (paquete compartido y API) |
 | `npm run test:e2e` | Pruebas de punta a punta de la API contra una base PostgreSQL de prueba |
+| `npm run lint` / `npm run lint:fix` | Análisis estático de web, API, reglas compartidas y herramientas; el segundo aplica correcciones automáticas |
+| `npm run sandbox:verificar -- --proveedor culqi` | Comprueba la configuración local de sandbox sin llamar al proveedor; también admite `mercadopago`, `niubiz` y `nubefact` |
+| `npm run test:sandbox` | Prueba las barreras del verificador sin credenciales, red ni conexión a PostgreSQL |
 | `npm run tipos -w @marea/web` | Revisa los tipos de TypeScript de la web sin compilarla |
 | `npm run build` y luego `npm start` | Compilación de producción y arranque |
+
+ESLint usa las reglas de Next.js/React en la web y de TypeScript en la API y el paquete compartido. Los errores hacen fallar el comando; las recomendaciones sobre efectos de React y bibliotecas incompatibles con su compilador permanecen como advertencias. Se permite `any` para las filas SQL y las respuestas externas que todavía no tienen un tipo definido.
 
 ---
 
@@ -357,6 +362,7 @@ Se auditó con axe-core (WCAG 2.1 AA) en escritorio y móvil: 10 páginas públi
 - **Usuarios**: cambia las contraseñas iniciales.
 
 ## Referencias de las integraciones
+- [Guía de pruebas sandbox](docs/pruebas-sandbox.md): credenciales requeridas, base separada, selección de `.env.sandbox` y casos de pago, devolución y comprobantes. La revisión local de variables no sustituye la validación contra el proveedor.
 - [Niubiz: registro individual de devoluciones](https://desarrolladores.niubiz.com.pe/docs/api-de-registro-individual-copy).
 - [Niubiz: consulta del estado de devolución](https://desarrolladores.niubiz.com.pe/docs/api-de-consulta-devolución-copy).
 - [Nubefact: documentación oficial y manual JSON para facturas, boletas y notas](https://www.nubefact.com/integracion).

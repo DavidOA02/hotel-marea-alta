@@ -1,9 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** Carga apps/api/.env (sin dependencias extra). Las variables del sistema tienen prioridad. */
-export function cargarEnv(archivo = path.resolve(__dirname, '..', '..', '.env')) {
-  if (!fs.existsSync(archivo)) return;
+/** Carga .env o API_ENV_ARCHIVO (sin dependencias extra). El sistema tiene prioridad. */
+export function cargarEnv(archivo = process.env.API_ENV_ARCHIVO
+  ? path.resolve(process.env.API_ENV_ARCHIVO)
+  : path.resolve(__dirname, '..', '..', '.env')) {
+  if (!fs.existsSync(archivo)) {
+    if (process.env.API_ENV_ARCHIVO) throw new Error('El archivo indicado en API_ENV_ARCHIVO no existe.');
+    return;
+  }
   for (const linea of fs.readFileSync(archivo, 'utf8').split(/\r?\n/)) {
     const m = linea.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
     if (m && !linea.trim().startsWith('#') && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
