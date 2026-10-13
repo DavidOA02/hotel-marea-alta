@@ -107,8 +107,19 @@ export class ReservasService {
         ON CONFLICT (tipo_documento, numero_documento) DO UPDATE SET nombres = EXCLUDED.nombres, apellidos = EXCLUDED.apellidos,
           email = EXCLUDED.email, codigo_pais = EXCLUDED.codigo_pais, telefono = EXCLUDED.telefono, residencia = EXCLUDED.residencia,
           acepta_publicidad = clientes.acepta_publicidad OR EXCLUDED.acepta_publicidad, idioma = coalesce(EXCLUDED.idioma, clientes.idioma)
-        RETURNING id`, [d.nombres, d.apellidos, d.tipoDocumento, d.numeroDocumento, d.email, d.codigoPais, d.telefono, s.residencia, !!s.aceptaPublicidad, d.idioma ?? null], c);
-      clienteId = r!.id;
+        WHERE NOT $11::boolean OR lower(trim(clientes.email)) = lower(trim(EXCLUDED.email))
+        RETURNING id`, [d.nombres, d.apellidos, d.tipoDocumento, d.numeroDocumento, d.email, d.codigoPais, d.telefono, s.residencia, !!s.aceptaPublicidad, d.idioma ?? null, !!s.webPublica], c);
+      if (r) {
+        clienteId = r.id;
+      } else {
+        // Otra transacción pudo registrar el documento después del SELECT inicial.
+        // ON CONFLICT bloquea esa fila y comprueba su correo antes de permitir cambios.
+        const titular = await this.db.uno<{ id: number }>(
+          'SELECT id FROM clientes WHERE tipo_documento = $1 AND numero_documento = $2 FOR UPDATE', [d.tipoDocumento, d.numeroDocumento], c);
+        if (!titular) throw falla(409, 'Los datos del cliente cambiaron. Inténtalo de nuevo.');
+        clienteId = titular.id;
+        correoRegistrado = true;
+      }
     }
 
     const noches = diasEntre(s.fechaEntrada, s.fechaSalida);
@@ -121,7 +132,8 @@ export class ReservasService {
       RETURNING id`, [clienteId, libre.id, s.fechaEntrada, s.fechaSalida, s.huespedes, s.horaLlegada ?? null, s.notas ?? null,
       q.exoneradoIgv, q.subtotal, q.igv, q.total, estado, s.canal, s.registradoPor ?? null, s.checkInInmediato ? new Date() : null], c);
     const { codigo } = (await this.db.uno<{ codigo: string }>(
-      `UPDATE reservas SET codigo = 'MA' || to_char(now(), 'YY') || lpad(id::text, 5, '0') WHERE id = $1 RETURNING codigo`, [res.id], c))!;
+      `UPDATE reservas SET codigo = 'MA' || to_char(now(), 'YY') || $2 WHERE id = $1 RETURNING codigo`,
+      [res.id, String(res.id).padStart(5, '0')], c))!;
 
     // Bitácora y correo de confirmación en la misma transacción: si la reserva no se guarda, tampoco ellos
     const datos = (await this.db.uno<any>(SQL_RESERVA + ' WHERE r.id = $1', [res.id], c))!;

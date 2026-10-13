@@ -72,7 +72,7 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  UPDATE reservas SET codigo = 'MA' || to_char(fecha_reserva, 'YY') || lpad(id::text, 5, '0') WHERE codigo LIKE 'TMP%';
+  UPDATE reservas SET codigo = 'MA' || to_char(fecha_reserva, 'YY') || lpad(id::text, greatest(5, length(id::text)), '0') WHERE codigo LIKE 'TMP%';
   UPDATE habitaciones h SET estado_limpieza = 'Sucia'
   WHERE EXISTS (SELECT 1 FROM reservas r WHERE r.habitacion_id = h.id AND r.estado = 'CheckOut' AND r.fecha_salida = hoy);
 

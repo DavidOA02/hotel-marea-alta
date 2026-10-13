@@ -129,9 +129,12 @@ describe('Esquemas Zod', () => {
     if (!f.success) expect(primerError(f.error).campo).toBe('ruc');
     expect(comprobanteSchema.safeParse({ tipo: 'Factura', ruc: '20123456789', razonSocial: 'Viajes SAC', direccion: 'Av. Lima 1' }).success).toBe(true);
   });
-  it('pago en línea: código MA + 7 dígitos y correo', () => {
+  it('pago en línea: código MA + al menos 7 dígitos y correo', () => {
     expect(pagoEnLineaSchema.parse({ codigo: ' ma2600042 ', email: 'A@B.PE' })).toEqual({ codigo: 'MA2600042', email: 'a@b.pe' });
     expect(pagoEnLineaSchema.safeParse({ codigo: '123', email: 'a@b.pe' }).success).toBe(false);
+    for (const codigo of ['MA2699999', 'MA26100000', 'MA262147483647']) {
+      expect(pagoEnLineaSchema.parse({ codigo, email: 'a@b.pe' }).codigo).toBe(codigo);
+    }
   });
   it('nota de crédito: el monto solo es obligatorio en la disminución en el valor', () => {
     expect(notaCreditoSchema.safeParse({ motivo: '01', sustento: 'Error en los datos' }).success).toBe(true);
