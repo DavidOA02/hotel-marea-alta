@@ -8,7 +8,7 @@ Continúa la [[2026-10-12 Auditoría general]] sin repetirla. Se revisaron las �
 |---|---|---|---|
 | 1 | La página Correos del panel tenía scroll horizontal en tableta | Baja | Corregido |
 | 2 | Faltaba una prueba de permisos para la mayoría de las rutas de administrador | Media | Prueba añadida |
-| 3 | Vulnerabilidades en dependencias de desarrollo | Baja | Pendiente |
+| 3 | Vulnerabilidades en dependencias de desarrollo | Baja | Críticas corregidas; quedan las que exigen cambio mayor |
 
 ---
 
@@ -29,7 +29,7 @@ Antes, las e2e comprobaban el 403 en 9 de las 22 rutas solo de administrador. La
 ## 3. Dependencias
 
 - Producción: `npm audit --omit=dev` encuentra 0 vulnerabilidades.
-- Desarrollo: 27 avisos. Los 2 críticos son de `shell-quote`, que usa `concurrently` solo con los scripts del `package.json`. Ningún dato externo llega ahí, así que el riesgo real es mínimo. `npm audit fix` (sin `--force`) los corrige, pero también agrega `cpu-features`, una dependencia nativa opcional de `ssh2`. No se aplicó para no mezclarlo con los cambios pendientes del `package-lock.json`.
+- Desarrollo: 27 avisos. Los 2 críticos son de `shell-quote`, que usa `concurrently` solo con los scripts del `package.json`. Ningún dato externo llega ahí, así que el riesgo real es mínimo. **Corregido** después con `npm audit fix` (sin `--force`): `shell-quote` 1.9.0 → 1.12.0, `concurrently` 9.2.4 → 9.2.5 y `babel-plugin-istanbul` 8.0.0 → 8.0.2. Solo cambian 10 líneas de `package-lock.json` y ningún `package.json`. Quedan 25 avisos (20 moderados, 5 altos) y ninguno crítico.
 - El resto (`eslint-config-next`, `jest`, `ts-jest`) solo tiene arreglo bajando de versión mayor. Se dejan así.
 
 ## Revisado sin errores
@@ -46,3 +46,43 @@ Antes, las e2e comprobaban el 403 en 9 de las 22 rutas solo de administrador. La
 - Los puertos 3000 y 4000 de este equipo los usa otro proyecto (`hospedaje-dubai`). Para probar Marea Alta se usaron 3100 y 4100.
 - El código de reserva es `'MA' || YY || lpad(id, 5, '0')`. Desde el id 100000, `lpad` recorta a 5 dígitos y repetiría códigos; el `UNIQUE` lo rechazaría. Falta mucho para llegar ahí, pero conviene ampliar el relleno antes.
 - No se revisaron con navegador las páginas solo de administrador: la cuenta de administrador de la base de pruebas exige cambiar la contraseña.
+
+---
+
+## Validación antes de fusionar `develop` en `main`
+
+`develop` es `main` más el commit `b7aa251`: `main` está en el mismo árbol que `652a7d0`. Una fusión de prueba en memoria (`git merge-tree`) no da conflictos.
+
+| Comprobación | Resultado |
+|---|---|
+| Lint (`npm run lint`) | 0 errores, 22 advertencias (las mismas aceptadas en el README) |
+| Tipos: shared, API y web (`tsc --noEmit`) | Sin errores |
+| Pruebas unitarias (`npm test`) | 40 + 37 correctas |
+| Verificador sandbox (`npm run test:sandbox`) | 13 correctas |
+| E2E con PostgreSQL local (`npm run test:e2e`) | 62 correctas |
+| Compilación de producción (`npm run build`) | Correcta, 25 rutas web |
+| Prueba de permisos: mutación | Sin `@Roles` en `GET suscriptores`, la prueba falla. Restaurado |
+
+**Corrección aplicada.** `.gitignore` ahora excluye `receipts/` y `review-receipts/` en cualquier carpeta (registros de las herramientas del agente) y `docs/.obsidian/workspace.json` (estado personal de Obsidian). Ningún archivo con seguimiento cae en esas rutas.
+
+**Seguridad de reservas revisada.**
+- «Mi reserva», cancelar y crear una orden de pago exigen código + correo del titular.
+- Las órdenes de pago y las encuestas usan UUID.
+- El pago simulado se rechaza en producción por `NODE_ENV` y por la pasarela de la orden.
+- Las reservas cruzadas se impiden con bloqueo por tipo + `EXCLUDE`, con prueba de concurrencia.
+
+**Resuelto después de la validación (sin commit):**
+- **GitHub Actions.** Antes no había ninguna validación automática de pull requests. Nuevo `.github/workflows/ci.yml`: en cada push o pull request a `main`/`develop` ejecuta `npm ci`, lint, compilación, pruebas unitarias, del verificador sandbox y e2e. Las e2e usan un PostgreSQL 17 desechable del runner (Node 24, permisos `contents: read`).
+- **`apps/web/next-env.d.ts`.** `next dev` y `next build` lo reescribían con rutas distintas y dejaban un cambio pendiente cada vez. La documentación de Next 16 (`02-typescript.md`) dice: «Add it to `.gitignore`. If your project already tracks the file, remove it from Git». Se añadió al `.gitignore` y se retiró del índice con `git rm --cached`; el archivo sigue en disco. El script `tipos` de la web ahora ejecuta `next typegen && tsc --noEmit`, para regenerarlo en un clon limpio.
+- **Dependencias críticas:** ver el punto 3.
+
+**Verificación.** Se clonó `develop` en una carpeta temporal y se le aplicaron los cambios, sin `next-env.d.ts`. Luego se ejecutaron los pasos del CI en orden:
+- `npm ci`: correcto, el lockfile es coherente.
+- `tipos`: correcto, regenera `next-env.d.ts`.
+- Lint: 0 errores.
+- Compilación: correcta.
+- Pruebas: 40 + 37 unitarias, 13 del verificador sandbox y 62 e2e, todas correctas.
+
+El `next-env.d.ts` regenerado ya no aparece en `git status`.
+
+**Sin bloquear la fusión:** `npm ls` marca `ajv-formats` 3.0.1 como inválido para `@hookform/resolvers`. Es una dependencia *peer* opcional del validador AJV, que la web no usa (usa Zod). Ya estaba igual en `main`.
