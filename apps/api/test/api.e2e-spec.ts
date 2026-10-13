@@ -1032,5 +1032,31 @@ describe('API Hotel Marea Alta (PostgreSQL real)', () => {
       expect(vuelve.correoRegistrado).toBe(false);
       expect((await cliente()).telefono).toBe('944555666');
     });
+
+    it('dos reservas web simultáneas de tipos distintos con el mismo documento nuevo no se pisan la ficha', async () => {
+      // Tipos distintos usan bloqueos distintos: las dos pueden llegar a la vez al INSERT del cliente
+      for (const [i, n] of [930, 931, 932, 933, 934].entries()) {
+        const fechas = { fechaEntrada: d(140 + i * 2), fechaSalida: d(141 + i * 2), huespedes: 1 };
+        const [a, b] = await Promise.all([
+          http.post('/api/reservas').send(huesped(n, { ...fechas, tipoHabitacion: 'duna', email: `a${n}@prueba.pe` })),
+          http.post('/api/reservas').send(huesped(n, { ...fechas, tipoHabitacion: 'pleamar', email: `b${n}@prueba.pe` }))
+        ]);
+        expect([a.status, b.status]).toEqual([201, 201]);
+        // Una crea la ficha; la otra queda enlazada al mismo cliente sin cambiar su correo
+        expect([a.body.correoRegistrado, b.body.correoRegistrado].filter(Boolean)).toHaveLength(1);
+        const titular = a.body.correoRegistrado ? `b${n}@prueba.pe` : `a${n}@prueba.pe`;
+        expect(await db().query(`SELECT email FROM clientes WHERE tipo_documento = 'DNI' AND numero_documento = $1`, [String(41000000 + n)]))
+          .toEqual([{ email: titular }]);
+        expect(await db().query(`SELECT DISTINCT cliente_id FROM reservas WHERE codigo = ANY($1)`, [[a.body.codigo, b.body.codigo]])).toHaveLength(1);
+      }
+    });
+
+    // Última prueba: adelanta la numeración de reservas de la base de prueba
+    it('el código de reserva no se recorta desde el id 100000', async () => {
+      await db().query('ALTER TABLE reservas ALTER COLUMN id RESTART WITH 100000');
+      const r = (await http.post('/api/reservas').send(huesped(940, { tipoHabitacion: 'duna', fechaEntrada: d(160), fechaSalida: d(161), huespedes: 1 })).expect(201)).body;
+      expect(r.codigo).toMatch(/^MA\d{2}100000$/);
+      expect((await http.get(`/api/reservas/${r.codigo}?email=h940@prueba.pe`).expect(200)).body.codigo).toBe(r.codigo);
+    });
   });
 });

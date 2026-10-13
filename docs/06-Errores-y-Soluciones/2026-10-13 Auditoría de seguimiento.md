@@ -86,3 +86,56 @@ Antes, las e2e comprobaban el 403 en 9 de las 22 rutas solo de administrador. La
 El `next-env.d.ts` regenerado ya no aparece en `git status`.
 
 **Sin bloquear la fusión:** `npm ls` marca `ajv-formats` 3.0.1 como inválido para `@hookform/resolvers`. Es una dependencia *peer* opcional del validador AJV, que la web no usa (usa Zod). Ya estaba igual en `main`.
+
+## Continuación: identidad del cliente bajo concurrencia
+
+**Estado inicial.** Rama `develop`, árbol limpio. El README describe funcionalidades existentes; los pendientes concretos están en estas auditorías y en la guía sandbox.
+
+**Causa encontrada en el código.** Dos reservas públicas de categorías distintas adquieren bloqueos de disponibilidad distintos. Si ambas buscan un documento aún no registrado, ambas pueden llegar al `INSERT` de clientes. El `ON CONFLICT DO UPDATE` anterior no comprobaba el correo y podía sustituir la ficha creada por la otra transacción. El `SELECT FOR UPDATE` inicial no bloquea una fila inexistente.
+
+**Corrección.** En `apps/api/src/reservas/reservas.service.ts`, el propio `ON CONFLICT` condiciona la actualización pública a que coincida el correo registrado, ignorando espacios exteriores y mayúsculas. Si no coincide, recupera el ID del titular sin modificar sus datos y activa `correoRegistrado`. Conserva el envío al correo del titular y el contacto propuesto en la bitácora. Recepción mantiene su comportamiento. Sin cambios de esquema ni de contrato público.
+
+**Validación ejecutada.**
+- `npm.cmd test`: 40 pruebas shared y 40 API correctas. Las tres nuevas en `identidad.spec.ts` simulan una fila confirmada entre la búsqueda y el INSERT: otro correo público, mismo correo con mayúsculas y reserva de recepción. Verifican ficha, destinatario, vinculación de reserva y bitácora.
+- `npm.cmd run test:sandbox`: 13 correctas, sin red ni credenciales.
+- `npm.cmd run lint`: 0 errores, 22 advertencias en la web.
+- `npm.cmd run build`: shared, API y web correctos; 25 páginas generadas.
+- `git diff --check`: correcto.
+
+**Limitaciones.** Las pruebas nuevas usan dobles de base de datos: no demuestran el bloqueo real en PostgreSQL. No se ejecutó `test:e2e`: su preparación elimina `hotel_marea_alta_test` usando la conexión local, y no se verificó que esa base fuera desechable. No se iniciaron servicios, se enviaron mensajes ni se ejecutaron migraciones o acciones de Git de publicación. PowerShell bloqueó `npm.ps1`; se usó `npm.cmd` sin cambiar la política de ejecución.
+
+**Pendientes priorizados.**
+1. Validar esta carrera con PostgreSQL desechable y añadir una prueba de dos categorías con el mismo documento. Asegurar el aislamiento del preparador e2e antes de ejecutarlo localmente.
+2. Truncamiento del código desde el ID 100000: corregido en la continuación siguiente; falta validarlo en la suite e2e aislada.
+3. Ejecutar los casos de pagos, devoluciones y comprobantes de `docs/pruebas-sandbox.md` con cuentas oficiales de prueba; la validación local no sustituye esa evidencia.
+4. Completar la revisión de navegador de las páginas de administrador en recursos de prueba aislados.
+
+## Continuación: códigos de reserva desde el ID 100000
+
+**Causa.** `lpad(id::text, 5, '0')` trunca los IDs largos: 100000 se convertía en 10000 y podía colisionar con una reserva anterior del mismo año. La columna `codigo` admite 20 caracteres y los validadores públicos aceptan al menos siete dígitos después de `MA`; no hace falta una migración ni cambiar códigos históricos.
+
+**Cambio.** `reservas.service.ts` calcula el correlativo con `String(res.id).padStart(5, '0')` y lo pasa como parámetro SQL. Conserva el prefijo y el año generado por PostgreSQL. `database/02_datos_demo.sql` usa `greatest(5, length(id::text))` como longitud de relleno para mantener el mismo formato en futuras bases demo. Este script no se ejecutó.
+
+**Pruebas.** `identidad.spec.ts` verifica la generación con IDs 42, 99999, 100000, 100001 y 2147483647 para los tres casos de identidad ya cubiertos (15 casos). El doble de base comprueba el correlativo recibido en el UPDATE y el código devuelto; no ejecuta PostgreSQL. `shared.test.ts` confirma que pago en línea acepta los códigos largos.
+
+**Validación ejecutada.** `npm.cmd test`: 40 shared y 52 API correctas. `npm.cmd run lint -- --quiet`: correcto, sin errores (omite advertencias). `npm.cmd run build`: shared, API y web correctos, 25 páginas generadas. `git diff --check`: correcto. Tras ajustar la ficha ficticia de las pruebas para que también use el código generado, se repitió la prueba de identidad.
+
+**Sin ejecutar.** E2E, SQL demo, migraciones y pruebas de navegador. Sin conexiones a bases de datos, mensajes, cobros, commits ni publicación. Los cambios de identidad anteriores se conservaron.
+
+## Continuación: validación con PostgreSQL de los pendientes 1 y 2
+
+**Aislamiento.** `hotel_marea_alta_test` es desechable por diseño: `test/preparar-bd.ts` la crea desde cero en cada ejecución y no toca otra base. La conexión es al PostgreSQL local (`PGHOST=localhost`, sin túnel SSH). Antes de ejecutar se comprobó que no hubiera otra suite e2e en curso.
+
+**Pruebas nuevas en `apps/api/test/api.e2e-spec.ts`:**
+- **«Dos reservas web simultáneas de tipos distintos con el mismo documento nuevo no se pisan la ficha».** 5 pares en paralelo (Duna y Pleamar), cada uno con otro correo. En cada par, una respuesta tiene `correoRegistrado`, la ficha conserva el correo de la otra y las dos reservas son del mismo cliente. La prueba aislada se repitió 3 veces (15 pares) sin fallos.
+- **«El código de reserva no se recorta desde el id 100000».** Adelanta la identidad de `reservas` en la base de prueba (`ALTER TABLE … RESTART WITH 100000`) y comprueba el código `MA` + año + `100000` y su consulta en «Mi reserva». Va la última porque cambia la numeración.
+
+**Validación.**
+- E2E: 64 correctas (antes 62).
+- Lint: 0 errores.
+- `npm run build`: correcto.
+- Unitarias: 40 + 52.
+- Verificador sandbox: 13.
+- `git diff --check`: correcto.
+
+**Pendientes 1 y 2:** cerrados. Siguen abiertos el 3 (sandbox con cuentas oficiales) y el 4 (navegador en las páginas de administrador).

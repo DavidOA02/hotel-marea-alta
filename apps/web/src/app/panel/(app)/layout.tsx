@@ -114,11 +114,12 @@ function Buscador() {
   }, []);
   useEffect(() => {
     if (q.trim().length < 2) { setRes(null); return; }
+    let vigente = true;   // una respuesta lenta de un texto anterior (o ya borrado) no reaparece
     const t = setTimeout(async () => {
       const [reservas, clientes] = await Promise.all([apiPanel(`/gestion/reservas?limite=5&buscar=${encodeURIComponent(q.trim())}`), apiPanel(`/gestion/clientes?limite=5&buscar=${encodeURIComponent(q.trim())}`)]).catch(() => [[], []]);
-      setRes({ reservas, clientes });
+      if (vigente) setRes({ reservas, clientes });
     }, 250);
-    return () => clearTimeout(t);
+    return () => { vigente = false; clearTimeout(t); };
   }, [q]);
   const limpiar = () => { setQ(''); setRes(null); };
   const items = res ? [...res.reservas.map(r => ({ k: 'r' + r.codigo, ir: () => abrir(r.codigo), t: <><b className="font-mono">{r.codigo}</b> · {r.cliente}<span className="block text-xs text-muted">{r.habitacion} · {r.fechaEntrada} → {r.fechaSalida}</span></>, e: r.estado })),

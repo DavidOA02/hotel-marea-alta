@@ -53,11 +53,12 @@ export function FormularioReserva() {
   const noches = v.fechaEntrada && v.fechaSalida && v.fechaSalida > v.fechaEntrada ? diasEntre(v.fechaEntrada, v.fechaSalida) : 0;
   useEffect(() => {
     if (!noches || !apiDisponible) { setLibres(null); return; }
+    let vigente = true;   // la disponibilidad de fechas anteriores no pisa la de las elegidas
     const t = setTimeout(() => {
       api<any[]>(`/disponibilidad?entrada=${v.fechaEntrada}&salida=${v.fechaSalida}&huespedes=${v.huespedes}`)
-        .then(l => setLibres(Object.fromEntries(l.map(x => [x.codigo, x.disponibles])))).catch(() => setLibres(null));
+        .then(l => { if (vigente) setLibres(Object.fromEntries(l.map(x => [x.codigo, x.disponibles]))); }).catch(() => { if (vigente) setLibres(null); });
     }, 300);
-    return () => clearTimeout(t);
+    return () => { vigente = false; clearTimeout(t); };
   }, [v.fechaEntrada, v.fechaSalida, v.huespedes, noches, apiDisponible]);
 
   const tipo = tipos.find(t => t.codigo === v.tipoHabitacion) ?? tipos[0];
