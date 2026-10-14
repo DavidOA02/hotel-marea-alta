@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { ENTIDADES_BITACORA, hoyLima, sumarDias } from '@marea/shared';
 import { fechaHora } from '@/lib/formato';
-import { BotonP, Cabecera, Cargando, Modal, useDatos } from '@/components/panel/base';
+import { BotonP, Cabecera, Cargando, ErrorCarga, Modal, useDatos } from '@/components/panel/base';
 import { Tabla, columnas } from '@/components/panel/tabla';
 import { useFicha } from '@/components/panel/reservas';
 
@@ -20,7 +20,7 @@ export default function Bitacora() {
   const [usuarioId, setUsuarioId] = useState(''); const [entidad, setEntidad] = useState(''); const [buscar, setBuscar] = useState(''); const [q, setQ] = useState('');
   useEffect(() => { const t = setTimeout(() => setQ(buscar.trim()), 350); return () => clearTimeout(t); }, [buscar]);
   const qs = new URLSearchParams(Object.entries({ desde, hasta, usuarioId, entidad, buscar: q, limite: '2000' }).filter(([, v]) => v)).toString();
-  const { datos } = useDatos<any[]>(`/gestion/bitacora?${qs}`);
+  const { datos, error, cargando, recargar } = useDatos<any[]>(`/gestion/bitacora?${qs}`);
   const { datos: usuarios } = useDatos<any[]>('/gestion/usuarios');
   const abrir = useFicha(s => s.abrir);
   const [ver, setVer] = useState<any>(null);
@@ -50,7 +50,7 @@ export default function Bitacora() {
         <label className="grid min-w-52 flex-1 gap-1 text-xs text-muted">Buscar<input className={sel} value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="Código, acción, descripción…" /></label>
       </div>
       <section className="overflow-hidden rounded-2xl border border-line bg-white" aria-label="Registros de la bitácora">
-        {!datos ? <Cargando /> : <Tabla etiqueta="bitácora" datos={datos} columnas={cols} alFila={setVer} porPagina={30} buscador={false} vacio="Sin registros con esos filtros."
+        {error ? <ErrorCarga mensaje={error} recargar={recargar} cargando={cargando} /> : !datos ? <Cargando /> : <Tabla etiqueta="bitácora" datos={datos} columnas={cols} alFila={setVer} porPagina={30} buscador={false} vacio="Sin registros con esos filtros."
           csv={{ nombre: `bitacora-${desde}-${hasta}.csv`, encabezados: ['Fecha', 'Usuario', 'IP', 'Acción', 'Entidad', 'Registro', 'Descripción', 'Datos'],
             filas: e => [e.fecha, e.usuario, e.ip, e.accion, e.entidad, e.entidadId, e.descripcion, e.datos ? JSON.stringify(e.datos) : ''] }} />}
       </section>

@@ -43,7 +43,7 @@ export default function LayoutPanel({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen bg-[#F3F4F1] text-[0.95rem]">
       <a href="#contenido" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[300] focus:bg-ocean focus:p-3 focus:text-white">Saltar al contenido</a>
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-64 print:hidden flex-col bg-ocean-3 text-[#C9D6D9] transition-transform lg:translate-x-0 ${menu ? 'translate-x-0 shadow-[0_0_0_100vmax_rgba(0,0,0,.35)]' : '-translate-x-full'}`} aria-label="Menú principal">
+      <aside id="menu-principal" className={`fixed inset-y-0 left-0 z-50 flex w-64 print:hidden flex-col bg-ocean-3 text-[#C9D6D9] transition-transform lg:visible lg:translate-x-0 ${menu ? 'visible translate-x-0 shadow-[0_0_0_100vmax_rgba(0,0,0,.35)]' : 'invisible -translate-x-full'}`} aria-label="Menú principal">
         <div className="flex h-16 items-center gap-3 border-b border-white/5 px-5">
           <Emblema className="size-10 shrink-0" mini />
           <span className="font-serif text-lg uppercase leading-none tracking-[0.1em] text-white">Marea Alta<span className="block font-sans text-[0.6rem] tracking-[0.3em] text-gold">Gestión</span></span>
@@ -62,7 +62,7 @@ export default function LayoutPanel({ children }: { children: React.ReactNode })
       </aside>
 
       <header className="sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-line bg-white/95 px-4 backdrop-blur lg:ml-64 lg:px-7 print:hidden">
-        <button className="grid size-10 place-items-center rounded-lg border border-line lg:hidden" onClick={() => setMenu(true)} aria-label="Abrir menú"><Menu className="size-5" /></button>
+        <button className="grid size-10 place-items-center rounded-lg border border-line lg:hidden" onClick={() => setMenu(true)} aria-label="Abrir menú" aria-controls="menu-principal" aria-expanded={menu}><Menu className="size-5" /></button>
         <Buscador />
         <TurnoChip />
         <span className="hidden text-sm text-muted first-letter:uppercase xl:block">{new Date().toLocaleString('es-PE', { timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long' })}</span>

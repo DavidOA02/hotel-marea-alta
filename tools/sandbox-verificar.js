@@ -6,7 +6,25 @@ const path = require('node:path');
 
 const PROVEEDORES = ['culqi', 'mercadopago', 'niubiz', 'nubefact'];
 const ARCHIVO = path.resolve(__dirname, '../apps/api/.env.sandbox');
-const AYUDA = 'Uso: node tools/sandbox-verificar.js --proveedor culqi|mercadopago|niubiz|nubefact [--archivo ruta]';
+const AYUDA = 'Uso: node tools/sandbox-verificar.js --proveedor culqi|mercadopago|niubiz|nubefact [--archivo ruta] [--entorno]';
+
+/** La API conserva las variables heredadas: no deben sustituir la configuración revisada. */
+function verificarEntorno(env, heredado, archivo) {
+  const errores = [];
+  const relevantes = /^(?:PG[A-Z0-9_]*|JWT_.*|SMTP_.*|SSH_.*|CULQI_.*|MP_.*|NIUBIZ_.*|NUBEFACT_.*|SERIE_.*|HOTEL_.*|CORREO_.*|NODE_ENV|NODE_OPTIONS|API_ENV_ARCHIVO|API_URL_PUBLICA|WEB_URL|PUERTO|TRUST_PROXY|CORS_ORIGENES|PASARELA|FACTURACION|PROCESOS_EN_SEGUNDO_PLANO|CORREOS_PROGRAMADOS|SIN_LIMITES)$/;
+  for (const [clave, valor] of Object.entries(heredado)) {
+    // Windows trata los nombres de entorno sin distinguir mayúsculas.
+    const nombre = process.platform === 'win32' ? clave.toUpperCase() : clave;
+    if (!relevantes.test(nombre) && !Object.hasOwn(env, nombre)) continue;
+    if (valor === undefined) continue;
+    if (nombre === 'API_ENV_ARCHIVO') {
+      if (valor && path.resolve(valor) !== path.resolve(archivo)) errores.push('API_ENV_ARCHIVO heredado selecciona un archivo distinto del revisado.');
+    } else if (Object.hasOwn(env, nombre) ? env[nombre] !== valor : valor !== '') {
+      errores.push(`${nombre} heredado difiere del archivo sandbox o no está definido en él. Elimínalo del terminal o hazlo coincidir antes de iniciar la API.`);
+    }
+  }
+  return errores;
+}
 
 function parsearEnv(texto) {
   const env = Object.create(null);
@@ -101,16 +119,21 @@ function ejecutar(args, opciones = {}) {
   const leerArchivo = opciones.leerArchivo || (archivo => fs.readFileSync(archivo, 'utf8'));
   if (args.length === 1 && args[0] === '--ayuda') { informar(AYUDA); return 0; }
   let proveedor;
+  let revisarEntorno = false;
   let archivo = ARCHIVO;
   const vistos = new Set();
-  for (let i = 0; i < args.length; i += 2) {
+  for (let i = 0; i < args.length; i++) {
     const clave = args[i];
+    if (clave === '--entorno' && !vistos.has(clave)) {
+      vistos.add(clave); revisarEntorno = true; continue;
+    }
     if (!['--proveedor', '--archivo'].includes(clave) || vistos.has(clave) || !args[i + 1] || args[i + 1].startsWith('--')) {
       informar(AYUDA); return 2;
     }
     vistos.add(clave);
     if (clave === '--proveedor') proveedor = args[i + 1];
     else archivo = path.resolve(args[i + 1]);
+    i++;
   }
   if (!PROVEEDORES.includes(proveedor)) { informar(AYUDA); return 2; }
   let env;
@@ -121,14 +144,17 @@ function ejecutar(args, opciones = {}) {
     return 1;
   }
   const resultado = verificarConfiguracion(env, proveedor);
+  if (revisarEntorno) resultado.errores.push(...verificarEntorno(env, opciones.entorno || process.env, archivo));
   informar(`Configuración local de sandbox: ${proveedor}.`);
   for (const error of resultado.errores) informar(`ERROR: ${error}`);
   for (const aviso of resultado.avisos) informar(`AVISO: ${aviso}`);
   informar('No se ha autenticado con el proveedor ni conectado a la base: no se hicieron solicitudes HTTP, cobros, devoluciones ni comprobantes.');
-  informar('Solo se revisó el archivo seleccionado; las variables heredadas del terminal no se verificaron.');
+  informar(revisarEntorno
+    ? 'Se revisaron el archivo seleccionado y las variables heredadas relevantes de este terminal; vuelve a verificar si cambias el entorno antes de iniciar la API.'
+    : 'Solo se revisó el archivo seleccionado; las variables heredadas del terminal no se verificaron.');
   if (!resultado.errores.length) informar('Configuración local completa. Falta ejecutar y registrar las pruebas reales del sandbox.');
   return resultado.errores.length ? 1 : 0;
 }
 
 if (require.main === module) process.exitCode = ejecutar(process.argv.slice(2));
-module.exports = { parsearEnv, verificarConfiguracion, ejecutar };
+module.exports = { parsearEnv, verificarConfiguracion, verificarEntorno, ejecutar };

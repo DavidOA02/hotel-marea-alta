@@ -76,6 +76,13 @@ export function Tarjeta({ titulo, icono: I, accion, children, className = '', si
 export const Vacio = ({ texto, icono: I = Inbox }: { texto: string; icono?: React.ElementType }) =>
   <div className="py-10 text-center text-muted"><I className="mx-auto mb-2 size-8 text-[#C9C5BA]" aria-hidden />{texto}</div>;
 export const Cargando = () => <div className="grid min-h-60 place-items-center" role="status"><span className="size-8 animate-spin rounded-full border-2 border-line border-t-ocean" /><span className="sr-only">Cargando…</span></div>;
+
+export function ErrorCarga({ mensaje, recargar, cargando }: { mensaje: string; recargar: () => void; cargando: boolean }) {
+  return <div className="rounded-lg bg-bad-bg p-4 text-bad">
+    <p role="alert">{mensaje}</p>
+    <BotonP variante="claro" className="mt-3" onClick={recargar} disabled={cargando}>{cargando ? 'Reintentando…' : 'Reintentar'}</BotonP>
+  </div>;
+}
 export const BotonP = ({ variante = 'primario', className = '', ...p }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variante?: 'primario' | 'oro' | 'claro' | 'peligro' | 'ok' }) => {
   const v = { primario: 'bg-ocean text-white hover:bg-ocean-2', oro: 'bg-gold-dark text-white hover:bg-[#5f4727]', claro: 'border border-line bg-white text-ink hover:bg-sand',
     peligro: 'bg-bad text-white hover:bg-[#86281a]', ok: 'bg-ok text-white hover:bg-[#17633a]' }[variante];

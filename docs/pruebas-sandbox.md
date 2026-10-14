@@ -31,17 +31,24 @@ node tools/sandbox-verificar.js --proveedor culqi
 # Archivo alternativo: añadir --archivo ruta/al/archivo.sandbox
 ```
 
-El comando solo lee el archivo indicado (por defecto `apps/api/.env.sandbox`), comprueba barreras de entorno y muestra los nombres de variables faltantes. Sale con código 1 si falta configuración o se detecta un entorno incompatible. No hace HTTP, no comprueba PostgreSQL, no autentica y no genera movimientos.
+El comando lee el archivo indicado (por defecto `apps/api/.env.sandbox`), comprueba barreras de entorno y muestra los nombres de variables faltantes. Sale con código 1 si falta configuración o se detecta un entorno incompatible. No hace HTTP, no comprueba PostgreSQL, no autentica y no genera movimientos.
 
-Abrir un terminal sin variables heredadas de producción: la API conserva la prioridad de las variables del sistema sobre las del archivo. El verificador revisa únicamente el archivo, por lo que no detecta esos valores heredados. Arrancar la API con selección explícita del archivo sandbox:
+La API conserva la prioridad de las variables del sistema sobre las del archivo. Por defecto el verificador revisa únicamente el archivo. Antes de arrancar, usar `--entorno` en **el mismo terminal** para rechazar variables heredadas relevantes que difieran del archivo o estén ausentes en él (base, credenciales, SMTP, SSH, proveedores, procesos y configuración de la API). Los mensajes identifican las variables, sin mostrar sus valores. `API_ENV_ARCHIVO` debe seleccionar el archivo revisado. Eliminar del terminal las variables indicadas o hacerlas coincidir con la configuración sandbox; no copiar credenciales de producción al archivo para superar el control. Volver a verificar si se cambia de terminal o configuración.
+
+Arrancar la API con selección explícita del archivo sandbox y verificación del entorno antes del arranque:
 
 ```powershell
 $env:API_ENV_ARCHIVO = (Resolve-Path apps/api/.env.sandbox).Path
+npm.cmd run sandbox:verificar -- --proveedor culqi --entorno
+if ($LASTEXITCODE -ne 0) { throw 'Configuración sandbox incompatible; no iniciar la API.' }
+# Cambiar culqi por el proveedor elegido. Si usas otro archivo, añadir --archivo.
 npm.cmd run build -w @marea/shared
 npm.cmd run dev -w @marea/api
 # Al terminar con Ctrl+C:
 Remove-Item Env:API_ENV_ARCHIVO
 ```
+
+Esta comprobación compara valores literales y no cambia el entorno ni arranca servicios. No demuestra que una cuenta externa sea de prueba, ni inspecciona las credenciales del panel del proveedor. Mantener las confirmaciones y las pruebas reales de las secciones siguientes.
 
 En otro terminal, iniciar la web con `npm.cmd run dev -w @marea/web`. Comprobar que `NEXT_PUBLIC_API_URL` apunta a esta API (`http://localhost:4000/api` para los puertos del ejemplo), y que no hay otra API ocupando el puerto. Para retornos o webhooks públicos, publicar mediante HTTPS solo esta instancia sandbox y ajustar `WEB_URL`, `API_URL_PUBLICA` (con `/api`) y `CORS_ORIGENES`. No exponer la base normal.
 

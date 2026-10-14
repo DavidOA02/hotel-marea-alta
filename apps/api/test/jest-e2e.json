@@ -4,6 +4,7 @@
   "rootDir": ".",
   "testRegex": ".e2e-spec.ts$",
   "globalSetup": "<rootDir>/preparar-bd.ts",
+  "globalTeardown": "<rootDir>/limpiar-bd.ts",
   "setupFiles": ["<rootDir>/entorno.ts"],
   "testTimeout": 30000,
   "moduleNameMapper": { "^@marea/shared$": "<rootDir>/../../../packages/shared/src" }

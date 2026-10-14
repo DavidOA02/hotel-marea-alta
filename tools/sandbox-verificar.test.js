@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { parsearEnv, verificarConfiguracion, ejecutar } = require('./sandbox-verificar');
+const { parsearEnv, verificarConfiguracion, verificarEntorno, ejecutar } = require('./sandbox-verificar');
 
 const base = {
   NODE_ENV: 'development', PGHOST: 'localhost', PGPORT: '5432', PGUSER: 'postgres', PGDATABASE: 'hotel_marea_alta_sandbox',
@@ -135,4 +135,65 @@ test('errores de configuración y argumentos nunca revelan valores secretos', ()
   salida.length = 0;
   assert.equal(ejecutar(['--proveedor', 'ultra-secreto'], { informar: x => salida.push(x) }), 2);
   assert.doesNotMatch(salida.join('\n'), /ultra-secreto/);
+});
+
+test('--entorno bloquea valores heredados que reemplazarían la base, proveedor o barreras', () => {
+  for (const [nombre, valor] of [
+    ['PGDATABASE', 'hotel_marea_alta'], ['PGHOST', 'base-real.example'], ['PGPASSWORD', 'clave-real'],
+    ['CULQI_LLAVE_SECRETA', 'sk_live_secreto'], ['FACTURACION', 'nubefact'], ['SMTP_HOST', 'smtp-real.example'],
+    ['PROCESOS_EN_SEGUNDO_PLANO', 'true'], ['CORREOS_PROGRAMADOS', 'true'], ['NODE_ENV', 'production'],
+    ['SSH_HOST', 'servidor-real.example'], ['PGOPTIONS', '-c search_path=public'], ['SIN_LIMITES', 'true'],
+    ['NODE_OPTIONS', '--require archivo-real.js']
+  ]) {
+    const salida = [];
+    assert.equal(ejecutar(['--entorno', '--proveedor', 'culqi'], {
+      leerArchivo: () => textoEnv(base), entorno: { [nombre]: valor }, informar: x => salida.push(x)
+    }), 1);
+    assert.ok(salida.some(x => x.includes(`${nombre} heredado`)));
+    assert.ok(salida.every(x => !x.includes(valor)));
+  }
+});
+
+test('--entorno permite valores idénticos, variables del sistema ajenas y claves ausentes', () => {
+  const salida = [];
+  assert.equal(ejecutar(['--proveedor', 'culqi', '--entorno'], {
+    leerArchivo: () => textoEnv(base), entorno: { ...base, PATH: 'ruta-del-sistema', SSH_HOST: '' }, informar: x => salida.push(x)
+  }), 0);
+  assert.match(salida.join('\n'), /variables heredadas relevantes de este terminal/);
+  assert.deepEqual(verificarEntorno(base, {}, 'apps/api/.env.sandbox'), []);
+  // Incluso una cadena vacía heredada impide a cargarEnv leer el valor del archivo.
+  assert.ok(verificarEntorno(base, { PGDATABASE: '' }, 'apps/api/.env.sandbox').some(x => x.includes('PGDATABASE')));
+});
+
+test('--entorno comprueba que API_ENV_ARCHIVO seleccione el mismo archivo revisado', () => {
+  const archivo = path.resolve('pruebas/cuenta.sandbox');
+  assert.deepEqual(verificarEntorno(base, { API_ENV_ARCHIVO: archivo }, archivo), []);
+  const errores = verificarEntorno(base, { API_ENV_ARCHIVO: 'secreto/no-es-sandbox.env' }, archivo);
+  assert.equal(errores.length, 1);
+  assert.match(errores[0], /API_ENV_ARCHIVO/);
+  assert.doesNotMatch(errores[0], /secreto/);
+  assert.equal(ejecutar(['--archivo', archivo, '--entorno', '--proveedor', 'culqi'], {
+    leerArchivo: () => textoEnv(base), entorno: { API_ENV_ARCHIVO: archivo }, informar: () => {}
+  }), 0);
+});
+
+test('--entorno no completa campos faltantes con secretos del terminal', () => {
+  const salida = [];
+  assert.equal(ejecutar(['--proveedor', 'culqi', '--entorno'], {
+    leerArchivo: () => textoEnv({ ...base, CULQI_LLAVE_SECRETA: '' }),
+    entorno: { CULQI_LLAVE_SECRETA: 'sk_test_secreto-heredado' }, informar: x => salida.push(x)
+  }), 1);
+  assert.match(salida.join('\n'), /Falta completar CULQI_LLAVE_SECRETA/);
+  assert.doesNotMatch(salida.join('\n'), /secreto-heredado/);
+});
+
+test('rechaza opciones repetidas o valores extra sin mostrar argumentos', () => {
+  for (const args of [
+    ['--proveedor', 'culqi', '--entorno', '--entorno'], ['--entorno', 'secreto'],
+    ['--proveedor', 'culqi', '--archivo'], ['--proveedor', 'culqi', '--proveedor', 'culqi']
+  ]) {
+    const salida = [];
+    assert.equal(ejecutar(args, { informar: x => salida.push(x) }), 2);
+    assert.doesNotMatch(salida.join('\n'), /secreto/);
+  }
 });
