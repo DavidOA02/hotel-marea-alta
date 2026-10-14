@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { Inbox, X } from 'lucide-react';
-import { ETIQUETAS } from '@marea/shared';
+import { ETIQUETAS, serializarCsv } from '@marea/shared';
 import { apiPanel, useRefresco } from '@/stores/sesion';
 
 /* ---------------- Datos ---------------- */
@@ -142,7 +142,7 @@ export function DialogoConfirmacion() {
 }
 
 export function descargarCsv(nombre: string, filas: (string | number | null | undefined)[][]) {
-  const txt = filas.map(f => f.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const txt = serializarCsv(filas);
   const url = URL.createObjectURL(new Blob(['\ufeff' + txt], { type: 'text/csv;charset=utf-8' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: nombre });
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
