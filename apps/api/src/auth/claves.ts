@@ -11,10 +11,17 @@ export function hashClave(clave: string): string {
 }
 
 export function verificarClave(clave: string, almacenado: string): boolean {
-  const [prefijo, iter, sal, hash] = (almacenado || '').split('$');
-  if (prefijo !== PREFIJO || !iter || !sal || !hash) return false;
+  // Validar antes de PBKDF2: un registro corrupto no debe causar excepciones
+  // ni controlar el coste del cálculo durante el inicio de sesión.
+  if (typeof almacenado !== 'string' || almacenado.length > 100) return false;
+  const partes = almacenado.split('$');
+  if (partes.length !== 4) return false;
+  const [prefijo, iter, sal, hash] = partes;
+  if (prefijo !== PREFIJO || iter !== String(ITERACIONES) || sal.length !== 24 || hash.length !== 44) return false;
+  const salBytes = Buffer.from(sal, 'base64');
   const esperado = Buffer.from(hash, 'base64');
-  const calculado = pbkdf2Sync(clave, Buffer.from(sal, 'base64'), Number(iter), esperado.length, 'sha256');
+  if (salBytes.length !== 16 || esperado.length !== 32 || salBytes.toString('base64') !== sal || esperado.toString('base64') !== hash) return false;
+  const calculado = pbkdf2Sync(clave, salBytes, ITERACIONES, 32, 'sha256');
   return calculado.length === esperado.length && timingSafeEqual(calculado, esperado);
 }
 
