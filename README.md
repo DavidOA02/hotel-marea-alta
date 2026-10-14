@@ -47,9 +47,9 @@ Users must change their passwords upon their first login. The "Test Users" panel
 | `npm run db` / `npm run db:demo` | Creates an empty database or one populated with demonstration data (**deletes the previous database**) |
 | `npm run db:migrar` | Applies `database/03_mejoras.sql` to the existing database **without deleting data**; can be executed repeatedly |
 | `npm test` | Executes Jest unit tests for the shared package and API |
-| `npm run test:e2e` | Runs API end-to-end tests against a dedicated PostgreSQL test database |
+| `npm run test:e2e` | Creates a unique local PostgreSQL database for API end-to-end tests and removes only that database afterward |
 | `npm run lint` / `npm run lint:fix` | Runs static analysis for the web application, API, shared rules, and tools; the second command applies automatic fixes |
-| `npm run sandbox:verificar -- --proveedor culqi` | Validates local sandbox configuration without contacting the provider; also supports `mercadopago`, `niubiz`, and `nubefact` |
+| `npm run sandbox:verificar -- --proveedor culqi` | Validates local sandbox configuration without contacting the provider; add `--entorno` to detect conflicting inherited terminal variables. Also supports `mercadopago`, `niubiz`, and `nubefact` |
 | `npm run test:sandbox` | Tests the sandbox configuration validator's safeguards without credentials, network access, or PostgreSQL |
 | `npm run tipos -w @marea/web` | Checks TypeScript types in the web application without compiling it |
 | `npm run build` followed by `npm start` | Builds and starts the application in production mode |
@@ -59,6 +59,8 @@ ESLint uses Next.js/React rules for the frontend and TypeScript rules for the AP
 Errors cause the command to fail. Recommendations concerning React effects and libraries incompatible with the React Compiler remain warnings.
 
 The `any` type is permitted for SQL rows and external responses that do not yet have defined types.
+
+End-to-end tests require a local PostgreSQL account with permission to create databases and the `btree_gist` extension. Connection credentials come from environment variables or `apps/api/.env`; `PGDATABASE` is replaced with a newly generated `hotel_marea_alta_e2e_<uuid>` name. Existing databases, including `hotel_marea_alta_test`, are never reset. Remote hosts, SSH tunnels, SSL connections, and production mode are rejected. Emails and provider calls remain simulated. If the process is interrupted or cleanup fails, its new test database may remain; the next run creates another database. The normal `npm test` command also checks these isolation safeguards without connecting to PostgreSQL.
 
 ---
 
@@ -1417,7 +1419,7 @@ Keyboard shortcuts include:
 | Notification bell reports failed emails | Open Emails, inspect the error (invalid address, SMTP rejection, etc.), and click Retry |
 | Emails are marked as "Simulated" | `SMTP_HOST` is missing from `apps/api/.env`. Emails are stored but not delivered |
 | The "Pay Online" option is missing | Check `PASARELA` and its credentials. The API displays the active payment gateway during startup |
-| `npm run test:e2e` fails because of the PostgreSQL password | Tests read `apps/api/.env`. Run `npm run db` first to save the password |
+| `npm run test:e2e` fails because of the PostgreSQL password | Configure the local test account's `PG*` variables in your environment or `apps/api/.env`. Do not run `npm run db` to fix test credentials: that command deletes the application database |
 
 ---
 

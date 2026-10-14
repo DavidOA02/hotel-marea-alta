@@ -72,6 +72,8 @@ export class AuthService {
   async validarAcceso(token: string): Promise<UsuarioSesion> {
     let p: any;
     try { p = this.jwt.verify(token, { secret: this.secretoAcceso }); } catch { throw falla(401, 'Tu sesión expiró. Ingresa de nuevo.'); }
+    if (!p || typeof p !== 'object' || p.tipo !== undefined || !Number.isSafeInteger(p.sub) || p.sub <= 0 || typeof p.sello !== 'string')
+      throw falla(401, 'Tu sesión ya no es válida. Ingresa de nuevo.');
     const u = await this.db.uno<UsuarioBd>('SELECT * FROM usuarios WHERE id = $1', [p.sub]);
     if (!u || !u.activo || selloUsuario(u) !== p.sello) throw falla(401, 'Tu sesión ya no es válida. Ingresa de nuevo.');
     return { id: u.id, nombre: u.nombre, email: u.email, rol: u.rol };
@@ -80,6 +82,8 @@ export class AuthService {
   async renovar(refreshToken: string) {
     let p: any;
     try { p = this.jwt.verify(refreshToken, { secret: this.secretoRenovacion }); } catch { throw falla(401, 'La sesión expiró. Ingresa de nuevo.'); }
+    if (!p || typeof p !== 'object' || p.tipo !== 'renovacion' || !Number.isSafeInteger(p.sub) || p.sub <= 0 || typeof p.sello !== 'string')
+      throw falla(401, 'Tu sesión ya no es válida. Ingresa de nuevo.');
     const u = await this.db.uno<UsuarioBd>('SELECT * FROM usuarios WHERE id = $1', [p.sub]);
     if (!u || !u.activo || p.tipo !== 'renovacion' || selloUsuario(u) !== p.sello) throw falla(401, 'Tu sesión ya no es válida. Ingresa de nuevo.');
     return this.emitir(u);

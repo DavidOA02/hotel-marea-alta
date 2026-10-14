@@ -139,3 +139,80 @@ El `next-env.d.ts` regenerado ya no aparece en `git status`.
 - `git diff --check`: correcto.
 
 **Pendientes 1 y 2:** cerrados. Siguen abiertos el 3 (sandbox con cuentas oficiales) y el 4 (navegador en las páginas de administrador).
+
+## Continuación: aislamiento de la preparación e2e
+
+**Estado inicial.** `develop` limpio, con las correcciones y las 64 e2e anteriores ya incorporadas. No se alteraron esos commits.
+
+**Riesgo confirmado.** El preparador ejecutaba `DROP DATABASE IF EXISTS hotel_marea_alta_test WITH (FORCE)` antes de crear la base. El nombre fijo y el uso habitual para pruebas no garantizan que su contenido sea descartable, y dos ejecuciones podían interferir. La validación anterior no eliminaba ese riesgo del código.
+
+**Cambio.** `apps/api/test/preparar-bd.ts` genera un nombre `hotel_marea_alta_e2e_<uuid>` y ejecuta CREATE sin borrar bases previamente existentes. Solo registra la propiedad de la base cuando CREATE termina correctamente. `limpiar-bd.ts`, configurado como globalTeardown de Jest, elimina exclusivamente esa base, sin FORCE. Si falla la carga del esquema, también limpia únicamente la base recién creada. El estado de propiedad se conserva en memoria entre setup y teardown; no se persisten credenciales.
+
+Los workers reciben el nombre generado mediante `MAREA_E2E_BD`, validan su formato y lo usan como `PGDATABASE`. Se retiraron las dos asignaciones al nombre fijo. La conexión se rechaza antes de abrirse si apunta a un host remoto, usa SSH o SSL, tiene un puerto inválido o indica producción. Se mantienen las pasarelas simuladas, SMTP vacío y los procesos automáticos desactivados.
+
+**Pruebas y comandos.**
+- `npm.cmd test`: 40 shared, 52 API y 16 salvaguardas de aislamiento correctas. Las últimas se ejecutan sin PostgreSQL y quedan incluidas en el comando habitual y en CI.
+- `npm.cmd run test:e2e`: 64 correctas con PostgreSQL local y una base nueva; incluyen concurrencia de identidad y código desde ID 100000.
+- `npm.cmd run build`: shared, API y web correctos, 25 páginas generadas.
+- `npm.cmd run lint -- --quiet`: inicialmente detectó un salto de línea en una llamada de la prueba nueva; corregido y repetido sin errores. Las advertencias no se muestran con `--quiet`.
+- `npm.cmd run test:aislamiento -w @marea/api`: repetido tras corregir el formato, 16 correctas.
+- Verificación adicional mediante `node` y una transacción READ ONLY sobre `postgres`: 0 bases con el prefijo temporal e2e al terminar. Solo se consultó `pg_database`.
+- `git diff --check`: correcto.
+
+**Documentación.** El README explica el ciclo de vida de las bases aisladas y los requisitos del usuario local. Su solución a errores de contraseña ya no recomienda ejecutar `npm run db`, que borra la base de la aplicación.
+
+**Acciones sobre datos y límites.** Se creó, inicializó y eliminó únicamente la base aleatoria de esta ejecución. No se reinició `hotel_marea_alta_test` ni se modificaron bases de la aplicación. Los SQL de esquema y mejoras se ejecutaron solo dentro de la base nueva. Sin proveedores externos, mensajes reales, cambios de arquitectura, commits ni publicación. Una interrupción del proceso o un fallo de limpieza puede dejar la base temporal; no se elimina automáticamente en otra ejecución. Las pruebas sandbox oficiales y la revisión de navegador de administrador siguen pendientes.
+
+## Continuación: revisión de administrador y foco del menú móvil
+
+**Entorno.** Se conservaron los cambios de aislamiento sin commit. Se creó otra base aleatoria con el preparador revisado, sin reutilizar bases existentes. Se inició NestJS desde el código actual en `127.0.0.1:4100` y Next.js en `127.0.0.1:3100`, con `NEXT_PUBLIC_API_URL` apuntando a esa API. Pagos y facturación simulados, SMTP vacío y procesos automáticos apagados. Se usó Playwright y el axe-core ya instalado; no se añadieron dependencias.
+
+**Defecto reproducido.** En `apps/web/src/app/panel/(app)/layout.tsx`, el menú cerrado solo se desplazaba fuera de pantalla mediante `-translate-x-full`. A 390 px, después de los enlaces para saltar al contenido, Tab enfocaba «Cerrar menú», «Dashboard», «Recepción» y otros enlaces con coordenadas negativas. El usuario de teclado no podía ver el foco. Axe-core no detectó este problema: lo identificó la comprobación de teclado.
+
+**Corrección.** El menú cerrado usa además `invisible`, con `lg:visible` para mantener la navegación de escritorio. Al abrirlo usa `visible`. El botón «Abrir menú» declara `aria-controls="menu-principal"` y `aria-expanded` según el estado. Cambio limitado a dos líneas del layout; sin modificar autenticación, contratos, diseño o esquema.
+
+**Verificación de navegador.**
+- Administrador: inicio de sesión, cambio obligatorio de contraseña temporal y nuevo acceso con la contraseña cambiada, sin omitir el flujo normal.
+- Reportes, Tipos y tarifas, Usuarios y Bitácora a 1440, 768 y 390 px (12 vistas): sin desbordamiento horizontal, alertas de error ni excepciones de JavaScript. Axe-core con etiquetas WCAG 2 A/AA y 2.1 AA: cero incidencias, repetido después de la corrección.
+- Menú: ocho pasos de Tab por ancho a 390, 768, 1024 y 1440 px. En móvil/tableta, ningún paso entra en el menú cerrado ni sale de pantalla. En escritorio, los enlaces permanecen accesibles. Abrir/cerrar funciona y actualiza `aria-expanded`.
+- Usuarios: validación de campos vacíos y creación de un usuario ficticio. El diálogo contiene el foco durante Tab, Escape lo cierra y el foco vuelve al botón de apertura. Diálogo sin incidencias axe-core.
+- Tarifas: edición de la tarifa ficticia Duna de 450 a 455 y confirmación del valor guardado. Diálogo sin incidencias axe-core. Bitácora: filtro de texto y apertura del detalle muestran `tipo.editar`, importe anterior y nuevo.
+- Reportes: filtro «Mes pasado» y descarga CSV con nombre correspondiente al periodo. Se revisó el estado sin reservas; no se verificaron gráficos con datos de ocupación.
+- Recepción: acceso normal con cambio de contraseña; las cuatro páginas exclusivas muestran la restricción. La API responde 403 a lectura de reportes, usuarios y bitácora, y a actualización de tarifas. La lectura de tipos responde 200, necesaria para registrar reservas y consistente con el contrato existente.
+
+**Comandos ejecutados.** `npm.cmd run lint -- --quiet` sin errores; `npm.cmd run tipos -w @marea/web` correcto; `npm.cmd run build -w @marea/web` correcto (25 páginas); `git diff --check` correcto. No se repitieron las pruebas unitarias o e2e de backend: el cambio afecta a visibilidad CSS y atributos del menú, verificados en navegador real.
+
+**Limpieza.** Se cerraron navegador, API y servidor Next.js. Se ejecutó el manejador de cierre de la API y la limpieza del preparador sobre su base propia; la consola confirmó su eliminación. Una consulta READ ONLY a `pg_database` confirmó cero bases con prefijo temporal e2e. Se retiraron el script temporal de revisión y los archivos generados por Playwright (solo datos ficticios). Sin correos, cobros reales, modificación de bases existentes, commits ni publicación.
+
+**Estado de pendientes.** Revisión de las páginas exclusivas de administrador completada en el alcance anterior, con el defecto de teclado corregido. La auditoría automática no constituye certificación integral de accesibilidad. Continúan pendientes los casos con cuentas sandbox oficiales de proveedores; no se ejecutaron en esta sesión.
+
+## Continuación: variables heredadas antes de iniciar sandbox
+
+**Hallazgo.** `cargarEnv` conserva la prioridad del entorno del proceso sobre el archivo. El verificador sandbox revisaba solamente el archivo, como advertía la guía: un archivo correcto podía obtener código 0 aunque el terminal heredara otra base, llaves de producción, SMTP activo o procesos automáticos. No se encontró `apps/api/.env.sandbox`; no se inspeccionaron ni crearon credenciales.
+
+**Cambio.** `tools/sandbox-verificar.js` incorpora `--entorno` como opción explícita. Compara las variables heredadas relevantes y las variables declaradas en el archivo, rechazando discrepancias y valores heredados no declarados. Comprueba también que `API_ENV_ARCHIVO` seleccione el archivo revisado. Los mensajes muestran únicamente nombres de variables. No completa campos con el entorno, no lo modifica y no inicia la API. El modo predeterminado conserva su comprobación exclusiva del archivo.
+
+**Pruebas.** Se añadieron cinco casos a `sandbox-verificar.test.js`: cambios heredados de base/proveedor/barreras; valores coincidentes y variables ajenas; selección de archivo; campos faltantes que no se completan con secretos del terminal; y argumentos repetidos o inválidos. Los casos cubren contraseña, llaves, SMTP, SSH, opciones PostgreSQL/Node, producción y procesos automáticos, sin red ni PostgreSQL.
+
+**Documentación.** README y `docs/pruebas-sandbox.md` explican la opción. La secuencia recomendada verifica el mismo terminal después de seleccionar `API_ENV_ARCHIVO` y detiene el arranque si el verificador no termina con código 0. No se recomienda copiar secretos de producción al archivo para superar el control.
+
+**Validación ejecutada.**
+- `npm.cmd run test:sandbox`: 18 correctas (antes 13).
+- `npm.cmd run lint -- --quiet`: sin errores.
+- `node tools/sandbox-verificar.js --ayuda`: código 0, incluye la opción nueva.
+- `npm.cmd run sandbox:verificar -- --proveedor culqi --entorno`: código 1 esperado porque no existe `.env.sandbox`; mensaje sin secretos y sin conexiones.
+- `git diff --check`: correcto.
+
+**Límites y estado.** Se revisaron herramientas y documentación; no se modificó la aplicación, se conectó a bases, se arrancaron servicios ni se ejecutaron pagos o mensajes. No se repitieron compilación o e2e porque el cambio se verifica con las pruebas de esta herramienta. La comprobación es una lectura puntual: debe repetirse si se cambia el terminal, archivo o entorno. No sustituye las pruebas oficiales ni demuestra que una cuenta externa sea sandbox. Esas pruebas siguen pendientes de credenciales y cuentas de prueba. Cambios anteriores conservados; sin commits ni publicación.
+
+## Continuación: errores de carga en páginas administrativas
+
+**Causa verificada.** Usuarios, Tipos y tarifas y Bitácora leían solamente `datos` de `useDatos`. Si fallaba la primera petición, el hook guardaba el error y terminaba la carga, pero `datos` seguía siendo null: la página mostraba «Cargando…» indefinidamente. Si fallaba un filtro con datos anteriores, tampoco informaba del fallo.
+
+**Cambio.** `ErrorCarga` en `apps/web/src/components/panel/base.tsx` reutiliza los estilos de error y `BotonP`, anuncia el mensaje con `role="alert"` y permite reintentar. Mientras se ejecuta la petición, el botón está deshabilitado y muestra «Reintentando…». Las tres páginas consumen `error`, `cargando` y `recargar` y dan prioridad al error sobre la tabla o las tarjetas. No cambia `useDatos`, sus controles de concurrencia, contratos ni permisos.
+
+**Pruebas de navegador.** Se usó una base aleatoria nueva, API local aislada y Next.js en 4100/3100. El administrador inició sesión y cambió la contraseña temporal mediante el flujo real. Playwright interceptó únicamente las peticiones de lectura seleccionadas para devolver un HTTP 500 controlado; al quitar esa interceptación, el reintento consultó la API real y sus datos ficticios. Las tres páginas mostraron una alerta, ningún indicador «Cargando…» y recuperaron su contenido sin recargar la página. Se repitieron las tres recuperaciones a 390 px, sin desbordes horizontales. Dos recorridos más amplios se interrumpieron al cerrarse el contexto de Playwright; se repitió la recuperación en una pestaña propia y solo se dan por aprobados los casos que devolvieron un resultado completo. No se afirma una nueva auditoría axe-core de estos estados.
+
+**Comandos.** `npm.cmd run lint -- --quiet` sin errores; `npm.cmd run tipos -w @marea/web` correcto; `npm.cmd run build -w @marea/web` correcto, 25 páginas; `git diff --check` correcto. No se repitieron unitarias o e2e del backend para este cambio de presentación.
+
+**Datos y limpieza.** El preparador creó e inicializó únicamente la base temporal; los únicos cambios de datos de la revisión fueron el acceso y cambio de contraseña del administrador ficticio. API cerrada y base propia eliminada por el manejador de limpieza. Consulta READ ONLY a `pg_database`: cero bases temporales restantes. Servidor Next.js cerrado y puertos de revisión sin listeners; script temporal y artefactos de Playwright retirados. Sin modificación de bases existentes, proveedores externos, mensajes reales, commits ni publicación. Cambios anteriores conservados.

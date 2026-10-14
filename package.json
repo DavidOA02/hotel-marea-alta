@@ -17,7 +17,7 @@
     "dev": "concurrently -n API,WEB -c cyan,yellow \"npm run dev -w @marea/api\" \"npm run dev -w @marea/web\"",
     "build": "npm run build -w @marea/shared && npm run build -w @marea/api && npm run build -w @marea/web",
     "start": "concurrently -n API,WEB -c cyan,yellow \"npm run start -w @marea/api\" \"npm run start -w @marea/web\"",
-    "test": "npm run test -w @marea/shared && npm run test -w @marea/api",
+    "test": "npm run test -w @marea/shared && npm run test -w @marea/api && npm run test:aislamiento -w @marea/api",
     "test:e2e": "npm run test:e2e -w @marea/api",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

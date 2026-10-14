@@ -27,9 +27,11 @@ export class FiltroErrores implements ExceptionFilter {
     if (e?.code === '23505') return res.status(409).json({ mensaje: 'Ya existe un registro con esos datos.', campo: null });
     if (e?.code === '40001' || e?.code === '40P01') return res.status(409).json({ mensaje: 'Otra operación se realizó al mismo tiempo. Inténtalo de nuevo.', campo: null });
     if (e?.type === 'entity.parse.failed') return res.status(400).json({ mensaje: 'El cuerpo de la petición no es un JSON válido.', campo: null });
+    if (e?.type === 'entity.too.large') return res.status(413).json({ mensaje: 'El cuerpo de la petición es demasiado grande.', campo: null });
     // Dato imposible que llegó a la base (número fuera de rango, fecha o texto con formato no válido): es del cliente, no del servidor
     if (['22P02', '22003', '22007', '22008'].includes(e?.code)) {
-      this.log.warn(`Dato rechazado por PostgreSQL (${e.code}): ${e.message}`);
+      // PostgreSQL puede incluir el valor recibido (datos personales) en su mensaje.
+      this.log.warn(`Dato rechazado por PostgreSQL (${e.code}).`);
       return res.status(400).json({ mensaje: 'Algún dato no tiene un formato válido. Revísalo e inténtalo de nuevo.', campo: null });
     }
     this.log.error(e?.stack ?? e);

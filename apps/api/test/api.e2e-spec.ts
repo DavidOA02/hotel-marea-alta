@@ -12,7 +12,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { CorreosProgramados } from '../src/correo/programados.service';
 
-process.env.PGDATABASE = 'hotel_marea_alta_test';
 process.env.SIN_LIMITES = 'true';
 
 const hoy = hoyLima();
